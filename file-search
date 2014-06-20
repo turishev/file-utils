@@ -1,0 +1,1749 @@
+#!/usr/bin/perl -w
+######################################################################
+# Copyright (c) 2014 Turishev Evgeniy <ew_turi@mail.ru>
+# This file is licensed under the GNU General Public License version 3
+# or any later version.
+#######################################################################
+
+use Carp;
+use Encode;
+use utf8;
+use open ':utf8';
+use Glib qw /TRUE FALSE/;
+use Gtk2 '-init';
+use File::Find;
+use File::Copy;
+use MIME::Base64 qw(decode_base64);
+
+use strict;
+no warnings "experimental::smartmatch";
+
+
+my $file_manager="thunar";
+my $editor="leafpad";
+my $open_helper = 'exo-open';
+my $main_title = 'file-search';
+
+my %default = (name                => '',
+               name_use_regexp     => 1,
+	       name_case_sensitive => 0,
+               directory => $ENV{PWD},
+               text_case_sensitive => 0);
+
+##### global var ######################################################
+my $icon_data;
+my $lang  = get_lang ();
+my %local_text;
+my %help_text;
+
+my $main_window;
+my $dir_box;
+my $name_box;
+my $type_box;
+my $result_list;
+my $grep_box;
+my $time_box;
+my $size_box;
+my $exec_box;
+my $stop_button;
+my $start_button;
+
+my $copy_to_dir= '';
+my $break_search;
+my (%search_name,  %search_time, %search_size,
+    @search_types, %search_text);
+
+#########################################################################
+{
+  my $icon_pixbuf;
+
+  eval {
+    my $raw_data = decode_base64 ($icon_data);
+    my $pixbufloader = Gtk2::Gdk::PixbufLoader->new;
+    $pixbufloader->write ($raw_data);
+    $pixbufloader->close;
+    $icon_pixbuf = $pixbufloader->get_pixbuf;
+  };
+  if ($@) {
+    print STDERR "error create icon\n";
+  }
+  undef $icon_data;
+
+  $main_window = Gtk2::Window->new ('toplevel');
+
+  $main_window->signal_connect (destroy => \&on_exit);
+
+  $main_window->set_border_width (5);
+  $main_window->set_title ($main_title);
+  $main_window->set_size_request (640, 480);
+
+  my $mainbox = Gtk2::VBox->new ();
+
+  my $table = Gtk2::Table->new (5, 4, FALSE);
+  $mainbox->pack_start ($table, FALSE, FALSE, 0);
+
+  my $lb = Gtk2::Label->new (text ('file name'));
+  $lb->set_alignment (0.0, 0.5);
+  $table->attach ($lb, 0, 2, 0, 1, ['fill'],['expand', 'fill'], 5, 0);
+
+  $name_box = Name_Box->new;
+  $table->attach_defaults ($name_box->box(), 2, 4, 0, 1);
+
+  $lb = Gtk2::Label->new (text ('directory'));
+  $lb->set_alignment(0.0, 0.5);
+  $table->attach ($lb, 0, 1, 1, 2, ['fill'],['expand', 'fill'], 5, 0);
+
+  my $butt = Gtk2::Button->new (" ... ");
+  $butt->signal_connect (clicked => sub {$dir_box->dialog_run ()});
+  $table->attach ($butt, 1, 2, 1, 2, ['fill'],['expand', 'fill'], 5, 0);
+
+
+  $dir_box = Dir_Box->new;
+  $table->attach_defaults ($dir_box, 2, 4, 1, 2);
+
+  $lb = Gtk2::Label->new (text ('modify time'));
+  $lb->set_alignment (0.0, 0.5);
+  $table->attach ($lb, 0, 2, 2, 3, ['fill'],['expand', 'fill'], 5, 0);
+
+
+  $time_box = Time_Box->new;
+  $table->attach_defaults ($time_box->box, 2, 3, 2, 3);
+
+  $size_box = Size_Box->new;
+  $table->attach_defaults ($size_box->box, 3, 4, 2, 3);
+
+  $lb = Gtk2::Label->new (text ('file types'));
+  $lb->set_alignment(0.0, 0.5);
+  $table->attach ($lb, 0, 2, 3, 4, ['fill'],['expand', 'fill'], 5, 0);
+
+  $type_box = Type_Box->new ('f','file',
+			     'd','dir',
+			     'l','link',
+			     's','socket',
+			     'p','pipe',
+			     'c','symbol',
+			     'b','block');
+
+  $table->attach_defaults ($type_box->box, 2, 4, 3, 4);
+
+  $lb = Gtk2::Label->new(text ('text (regexp)'));
+  $lb->set_alignment(0.0, 0.5);
+  $table->attach ($lb, 0, 2, 4, 5, ['fill'],['expand', 'fill'], 5, 0);
+
+  $grep_box = Grep_Box->new;
+
+  $table->attach_defaults ($grep_box->box, 2, 4, 4, 5);
+
+  my $menu = Menu::create (text ("Open")       ."\tCtrl-w", \&open_handler,
+			   text ("Editor")     ."\tCtrl-e", \&edit_handler,
+			   text ("Open dir")   ."\tCtrl-f", \&open_dir_handler,
+			   text ("Copy")       ."\tCtrl-c", \&clipboard_copy,
+			   text ("Cut")        ."\tCtrl-x", \&clipboard_cut,
+			   text ("Delete")     ."\tCtrl-d", \&delete_handler,
+			   text ("Rename")     ."\tCtrl-n", \&rename_handler,
+			   text ("Copy to ..") ."\tCtrl-s", \&copy_to_handler);
+
+  $result_list = File_List->new ();
+  $result_list->key_press_handler (\&list_press_key);
+  $result_list->click_handler (\&list_click_handler);
+
+  #EventBox нужен для корректного позиционировани контекстного меню
+  my $eventbox = Gtk2::EventBox->new();
+  #$eventbox->set_above_child (TRUE);
+  $eventbox->signal_connect('button-release-event' => sub {
+			      my ($widget,$event) = @_;
+			      my $button_nr = $event->button;
+			      ($result_list->selected_inx)
+				&& ($button_nr == 3)
+				  &&($menu->popup(undef,undef,undef,undef,0,0));
+			    });
+
+  $eventbox->add ($result_list->box());
+
+  $mainbox->pack_start ($eventbox, TRUE, TRUE, 0);
+
+  $exec_box = Exec_Box->new;
+  $exec_box -> set_handler (\&exec_handler);
+  $mainbox->pack_start ($exec_box->box, FALSE, FALSE, 0);
+
+  # кнопки управления
+  my $hbox = Gtk2::HBox->new(TRUE);
+  $start_button = Gtk2::Button->new (text ("Start"));
+  $start_button->signal_connect (clicked => \&on_start_search, $main_window);
+  $hbox->pack_start ($start_button, TRUE, TRUE, 0);
+
+  $stop_button = Gtk2::Button->new (text ("Stop"));
+  $stop_button -> signal_connect (clicked => \&on_stop_search,  $main_window);
+  $hbox->pack_start ($stop_button, TRUE, TRUE, 0);
+
+  $butt = Gtk2::Button->new (text ("Reset"));
+  $butt->signal_connect (clicked => \&init_controls,  $main_window);
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+
+  $butt = Gtk2::Button->new (text ("Help"));
+  $butt->signal_connect (clicked => \&show_help,  $main_window);
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+
+  $butt =  Gtk2::Button->new (text ("Close"));
+  $butt->signal_connect (clicked => \&on_exit, $main_window);
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+
+  $mainbox->pack_start($hbox, FALSE, FALSE, 0);
+
+  $main_window->signal_connect ('key-press-event' => \&window_press_key);
+
+  $main_window->add ($mainbox);
+
+
+  $main_window->show_all;
+
+  $main_window->set_icon ($icon_pixbuf);
+}
+
+init_controls ();
+
+Gtk2->main;
+
+0;
+
+## localization #############################################################
+sub get_lang {
+  my ($x, $codepage) = split /\./, $ENV{LANG};
+  my ($language, $country) = split /_/, $x;
+
+  if ($codepage and $codepage =~ /utf-?8/i) {
+    return lc ($language);
+  }
+  else {
+    return 'en';
+  }
+}
+
+sub text {
+  my $key = shift;
+  $lang eq 'en' and return $key;
+  #print "lang:$lang, key:$key->", $local_text {$key}->{$lang}, "\n";
+  exists $local_text {$key}->{$lang} ? return $local_text {$key}->{$lang} : return $key;
+}
+
+sub show_help {
+  my $dialog = Gtk2::Dialog->new (text ('Help'),
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-ok'     => 'ok');
+
+  $dialog->set_size_request (640, 480);
+  my $textview = Gtk2::TextView->new();
+  my $scroll = Gtk2::ScrolledWindow->new;
+  $scroll->set_policy ('automatic', 'automatic');
+  $scroll->add ($textview);
+
+  $textview->set_editable (FALSE);
+  $textview->set_wrap_mode ('word');
+
+  my $buffer = $textview->get_buffer();
+  my $head_tag = $buffer->create_tag ('head',
+				      'foreground' => '#006600',
+				      'weight'     => 900);
+  my $start = $buffer->get_start_iter();
+  my $end;
+
+  for my $i (@{$help_text{$lang}}) {
+    $buffer->insert_with_tags ($start, $i->{title} . "\n\n", $head_tag);
+    $buffer->insert ($start, $i->{text} . "\n\n");
+  }
+
+  $dialog->vbox->add ($scroll);
+  $dialog->show_all;
+  my $response = $dialog->run;
+  $dialog->destroy;
+}
+
+#######################################################################################
+sub init_controls {
+  $dir_box->set ($default{directory});
+  $name_box->grab_focus;
+  $name_box->set ($default{name}, $default{name_use_regexp}, $default{name_case_sensitive});
+  $name_box->set_pos (1);
+  $size_box->init;
+  $time_box->init;
+  $grep_box->init ($default{text_case_sensitive});
+  $result_list->clear;
+  #$exec_box->init;
+  $stop_button->set_sensitive (0);
+  $start_button->set_sensitive (1);
+  $main_window->set_title ($main_title);
+}
+
+sub show_msg {
+  my ($type, $text) = @_;
+  my $butt = 'ok';
+
+  if ($type eq 'question') {
+    $butt = 'yes-no';
+  }
+  my $dialog = Gtk2::MessageDialog->new ($main_window,
+                                         'destroy-with-parent',
+                                         $type, # message type
+                                         $butt, # which set of buttons?
+                                         $text);
+
+  if ($dialog->run eq 'yes') {
+    $dialog->destroy;
+    return 1;
+  }
+  else {
+    $dialog->destroy;
+    return 0;
+  }
+}
+
+sub file_dialog_run {
+  my $caption = shift;
+  my $res;
+
+  my $dialog = Gtk2::FileChooserDialog->new
+    ('Выбор ' . $caption,
+     undef,
+     'select-folder',
+     'gtk-ok'     => 'ok',
+     'gtk-cancel' => 'cancel');
+
+  my $filter = Gtk2::FileFilter->new;
+  $filter->add_mime_type ('inode/directory');
+  $dialog->set_filter ($filter);
+  my $response = $dialog->run;
+  $res = $response eq 'ok' ? $dialog->get_filename : '';
+  $dialog->destroy;
+  return $res;
+}
+
+##############################################################################
+# обработчики menu
+sub edit_handler {
+  my $pid;
+  if (not $pid = fork) {
+    exec ($editor, $result_list->selected_names);
+  }
+}
+
+sub open_dir_handler {
+  my @names = $result_list->selected_names;
+  #оставить только имя директории
+  map (s/\/[^\/]+?$//, @names);
+  my $pid;
+  if (not $pid = fork) {
+    exec ($file_manager, @names);
+  }
+}
+
+sub open_handler {
+  #print  "open:", $result_list->selected_names, "\n";
+  my $pid;
+  if (not $pid = fork) {
+    exec ($open_helper, $result_list->selected_names);
+  }
+}
+
+sub delete_handler {
+  my @names = $result_list->selected_names;
+
+  my $namestr = join "\n", @names;
+  my $yes = show_msg ('question', text ("Delete file (dir, reqursive)?")
+		                        . "\n$namestr");
+
+  my %err_names;
+
+  if ($yes) {
+    require File::Path;
+    my $err;
+    File::Path::remove_tree (@names , {error => \$err});
+
+    if (@$err) { #ошибка
+      my $m;
+      for my $diag (@$err) {
+    	my ($file, $message) = %$diag;
+        $err_names{$file} = 1;
+    	$m .= decode ('utf8', "$file:\n $message\n");
+      }
+      show_msg ('error', text ("Delete file error"). "\n$m");
+    }
+    my @del_names;
+    map {push @del_names, $_ if !exists $err_names{$_}} @names;
+    $result_list->delete_names (@del_names);
+  }
+}
+
+sub rename_handler {
+  my @names = $result_list->selected_list;
+
+  return if $#names != 0;
+
+  my $nam = $names[0]->{file};
+  my $dir = $names[0]->{dir};
+  my $inx = $names[0]->{inx};
+
+  my $dialog = Gtk2::Dialog->new (text ("Rename"),
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-cancel' => 'cancel',
+				  'gtk-ok'     => 'ok');
+
+  my $entr = Gtk2::Entry->new;
+  $entr -> set_text ($nam);
+  $entr->set_width_chars (length $nam);
+  $dialog->vbox->add ($entr);
+
+  $dialog->set_default_response ('ok');
+  $dialog->show_all;
+  my $response = $dialog->run;
+
+  if ($response eq 'ok') {
+    my $old = $dir . '/' . $nam;
+    my $new = $dir . '/' . $entr->get_text();
+    my $res = rename ($old, $new);
+
+    if (! $res) { #ошибка
+      show_msg ('error', text ("Rename error") . "$res\nfrom $old\n to $new");
+    }
+    else {
+      # $result_list->rename_file ($names[0]->{inx}, $entr->get_text);
+      $result_list->delete_items ($inx);
+    }
+  }
+  $dialog->destroy;
+}
+
+sub copy_to_handler {
+  my @names = $result_list->selected_list;
+  return if $#names != 0;
+
+  my $from_dir = $names[0]->{dir};
+  my $file = $names[0]->{file};
+  my $path = $from_dir . '/' . $file;
+
+  return if ! -f $path;
+
+  my $dialog = Gtk2::Dialog->new (text ("Copy to .."),
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-cancel' => 'cancel',
+				  'gtk-ok'     => 'ok');
+
+  my $hbox = Gtk2::HBox->new;
+
+  my $butt = Gtk2::Button->new ("clear");
+  $hbox -> pack_start ($butt, FALSE, FALSE, 0);
+  $butt->set_size_request(64);
+
+  my $entr = Gtk2::Entry->new;
+  $entr -> set_text ($file);
+  $entr->set_width_chars (64);
+  $hbox -> pack_start ($entr, TRUE, TRUE, 0);
+
+  $butt->signal_connect (clicked => sub {$entr->set_text('')});
+
+  my $vbox = Gtk2::VBox->new;
+  $vbox -> pack_start ($hbox, FALSE, FALSE, 0);
+
+  $hbox = Gtk2::HBox->new;
+  #  my $label = Gtk2::Label->new (">>>");
+  #  $hbox->pack_start ($label, FALSE, FALSE, 0);
+
+  $butt = Gtk2::Button->new (" dir ");
+  $butt->set_size_request(64);
+  $hbox -> pack_start ($butt, FALSE, TRUE, 0);
+
+  my $direntr = Gtk2::Entry->new;
+
+  $direntr -> set_text ($copy_to_dir);
+  $direntr -> set_width_chars (length $copy_to_dir);
+  $hbox->pack_start ($direntr, TRUE, TRUE, 0);
+  $vbox -> pack_start ($hbox, FALSE, FALSE, 0);
+
+
+  $butt->signal_connect (clicked => sub {
+                           my $res = file_dialog_run ("Copy to ..");
+                           $direntr->set_text ($res) if $res;
+                         }
+                        );
+
+  my $textview = Gtk2::TextView->new();
+  $textview->set_editable (FALSE);
+  #$textview->set_border_window_size ('top', 5);
+  #$textview->set_border_window_size ('bottom', 5);
+  $textview->set_wrap_mode ('char');
+  $vbox -> pack_start ($textview, TRUE, TRUE, 0);
+
+  $dialog->vbox->add ($vbox);
+
+  $textview->signal_connect('button-press-event' =>
+     sub {
+       my ($widget,$event) = @_;
+       my $button_nr = $event->button;
+       if ($button_nr == 3) {
+             my $buffer = $widget->get_buffer();
+             return if not $buffer->get_has_selection;
+             my $str = $buffer->get_text ($buffer->get_selection_bounds, FALSE);
+             #print "$str\n";
+             $entr->append_text (' ') if length ($entr->get_text) > 0;
+             $entr->append_text ($str);
+             return TRUE;
+        }
+          return FALSE
+     });
+
+  my $buffer = $textview->get_buffer();
+
+  my $mp3_tags;
+  if ($file =~ /.+\.mp3$/) {
+     my $cmd = 'id3v2 -l ' . name_str($path);
+     $mp3_tags = qx ($cmd);
+     $mp3_tags =~ s/Artist:/\nArtist:/;
+     $mp3_tags =~ s/Year:/\nYear:/;
+     $mp3_tags =~ s/Track:/\nTrack:/;
+     $mp3_tags =~ s/Genre:/\nGenre:/;
+     $mp3_tags =~ s/id3v2 tag info.+\n/\n-- id3v2 tags --\n/;
+     $mp3_tags =~ s/id3v1 tag info.+\n/\n-- id3v1 tags --\n/;
+     $mp3_tags =~ s/^.+?No ID3v\d tag//im;
+  }
+
+  if ($file =~ /.+\.flac$/) {
+     my $cmd = 'metaflac --show-tag=ARTIST --show-tag=TITLE'
+                .' --show-tag ALBUM --show-tag=DATE --show-tag=GENRE '
+	        . name_str($path);
+     $mp3_tags = "-- metaflac tags --\n" . qx ($cmd);
+  }
+
+  $buffer->set_text ("dir:  ". $from_dir .
+		     "\n\nfile: " . "$file" .
+		     "\n" . ($mp3_tags ? $mp3_tags :''));
+
+  $dialog->set_default_response ('ok');
+  $dialog->show_all;
+  my $response = $dialog->run;
+
+  if ($response eq 'ok') {
+    $copy_to_dir = $direntr->get_text();
+    my $new_path = $direntr->get_text() . "/" . $entr->get_text;
+
+    if (-f $new_path) {
+      show_msg ('error', "File exists\n$new_path");
+    }
+    else {
+      if (! copy ($path, $new_path)) {
+	show_msg ('error', "Copy error\n$from_dir/$file -> \n$new_path");
+      }
+    }
+  }
+  $dialog->destroy;
+}
+
+sub exec_handler {
+  my $cmd = $exec_box->cmd;
+  return if ! $cmd;
+
+  $exec_box->text_to_list ($cmd) if $cmd !~ /(^\s+$)|(^$)/;
+
+  my @names = $result_list->selected_list;
+
+  for my $i (@names) {
+    my $dir = $i->{dir};
+    my $file = $i->{file};
+    my $path =  "$dir/$file";
+
+    $ENV{p} = $path;
+    $ENV{f} = $file;
+    $ENV{d} = $dir;
+
+    my ($pid, @proc);
+
+    if ($pid = fork) {
+	push @proc, $pid;
+    }
+    else {
+      exec $cmd;
+    }
+  }
+}
+###########################################################################
+my $found_counter = 0;
+
+sub check_file {
+  die "break search" if $break_search;
+
+  my $name = decode ('utf8', $_);
+  my $dir = decode ('utf8', $File::Find::dir);
+  my $path = $dir .'/'. $name;
+  #  my $path = decode ('utf8', $File::Find::name);
+
+  return if $name eq '.' or $name eq '..';
+
+  my $res;
+
+  if ($search_name{regexp}) {$res = $name =~ $search_name{name}}
+  elsif ($search_name{case}) { $res = (index ($name, $search_name{name}) > -1)}
+  else { $res = (index (lc ($name), $search_name{name}) > -1)}
+
+  my @par = lstat ($name);
+    #               0 dev      device number of filesystem
+    #               1 ino      inode number
+    #               2 mode     file mode  (type and permissions)
+    #               3 nlink    number of (hard) links to the file
+    #               4 uid      numeric user ID of file's owner
+    #               5 gid      numeric group ID of file's owner
+    #               6 rdev     the device identifier (special files only)
+    #               7 size     total size of file, in bytes
+    #               8 atime    last access time in seconds since the epoch
+    #               9 mtime    last modify time in seconds since the epoch
+    #              10 ctime    inode change time in seconds since the epoch (*)
+    #              11 blksize  preferred block size for file system I/O
+    #              12 blocks   actual number of blocks allocated
+
+  if (not @par) {
+    carp "stat error for:", encode ('utf8', $path), "\n";
+    return;
+  }
+
+  my $type = file_type_format ($par[2] >> 12);
+  my $info;
+  if ($type eq 'l') {
+    $info = "-> ". readlink ($name);
+  }
+  if ($type eq 'c' or $type eq 'b') {
+    $info = rdev_format ($par[6]);
+  }
+  my $size = $par[7];
+  my $time = $par[9];
+  my $perm =  perm_format($par[2] & 07777);
+  my $owner = owner_format($par[4], $par[5]);
+
+  if ($search_time{time}) {
+    $res &&= ($search_time{before} ? $time < $search_time{time} : $time > $search_time{time})
+  }
+
+  $res &&= (! defined $search_size{min} or $size >= $search_size{min});
+  $res &&= (! defined $search_size{max} or $size <= $search_size{max});
+
+  $res &&= (! @search_types or $type ~~ @search_types);
+
+  #   print 'FILE:"', encode ('utf8', $path), "\"\n" if $res;
+
+  my $text_res = 1;
+
+  if ($res and $search_text{re}) {
+    $text_res = 0;
+
+    if (open FILE, $name) {
+      #print "text search in:$name\n";
+      my $err;
+      local $SIG{__WARN__} = sub {warn "Error regexp search in:'", encode ('utf8', $path), "'\n"; $err = 1;};
+      local $SIG{__DIE__} = sub {warn "ERROR regexp search in:'", encode ('utf8', $path), "'\n"; $err = 1;};
+      while (<FILE>) {
+        $text_res = eval {($_ =~ $search_text{re})};
+        last if $text_res or $err;
+      }
+      close FILE;
+    }
+    else {
+      warn "Error open regexp search:'", encode ('utf8', $path), "'\n";
+    }
+  }
+
+  $res &&= $text_res;
+
+  if ($res) {
+    $result_list->add ($name, $dir, $type, num_format ($size),
+		       time_format($time), $perm, $owner, $info);
+    $found_counter++;
+    $main_window->set_title ($main_title . ':' . $found_counter);
+  }
+  while (Glib::MainContext->default->pending)
+    { Glib::MainContext->default->iteration(FALSE) };
+}
+
+
+sub on_start_search {
+  $name_box->text_to_list;
+  $dir_box->text_to_list;
+  $grep_box->text_to_list;
+  $result_list->clear;
+  $main_window->set_title ($main_title . ": started");
+
+  %search_name = $name_box->get;
+
+  if ($search_name{regexp}) {
+    if ($search_name{case}) {
+      $search_name{name} = eval {qr/$search_name{name}/} || print STDERR "regexp error";
+    }
+    else     {
+      $search_name{name} = eval {qr/$search_name{name}/i} || print STDERR "regexp error";
+    }
+  }
+  else {
+    if (! $search_name{case}) {
+      $search_name{name} = lc $search_name{name};
+    }
+  }
+
+  undef %search_time;
+  undef %search_size;
+  undef @search_types;
+  undef %search_text;
+
+  my ($sec, $less_more) = $time_box->get();
+
+  if ($sec) {
+    $search_time{time} = time - $sec;
+    $search_time{before} = $less_more eq '<';
+  }
+
+  %search_size =  $size_box->get;
+
+  if (! defined $search_size{min} and ! defined $search_size{max} ) {
+    undef %search_size;
+  }
+
+  @search_types = $type_box->get();
+
+  %search_text = $grep_box->get();
+
+  if ($search_text{re}) {
+    if ($search_text{case}) {
+      $search_text{re} = eval {qr/$search_text{re}/} || print STDERR "regexp error";
+    }
+    else {
+      $search_text{re} = eval {qr/$search_text{re}/i} || print STDERR "regexp error";
+    }
+  }
+  $found_counter = 0;
+  $break_search = 0;
+  $stop_button->set_sensitive (1);
+  $start_button->set_sensitive (0);
+
+  eval {
+    find ({wanted => \&check_file,
+	   follow => 0},
+	  encode ('utf8', $dir_box->get));
+  };
+  if ($@) {
+    carp "error search: $@" if $@ !~ /break search/;
+  }
+
+   $main_window->set_title ($main_title .':'. $result_list->row_count()
+   			   . ($break_search ? ' (aborted)' : ' (end)'));
+
+  $stop_button->set_sensitive (0);
+  $start_button->set_sensitive (1);
+}
+
+sub on_stop_search {
+  $break_search = 1;
+  $stop_button->set_sensitive (0);
+  $start_button->set_sensitive (1);
+
+}
+
+sub on_exit {
+  $break_search = 1;
+  Gtk2->main_quit;
+}
+
+sub name_str {
+  my $namestr = "";
+  for my $nm (@_) {
+    $nm =~ s/"/\\\"/g;
+    $namestr .= " \"$nm\"";
+  }
+  return $namestr;
+}
+
+sub del_sp {
+  my $s = shift;
+  $s =~ s/^\s+//;
+  $s =~ s/\s+$//;
+  return $s;
+}
+
+# функции форматирования данных для вывода
+sub time_format {
+  my $tm = shift;
+  my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst)
+    = localtime($tm);
+
+  return sprintf "%4d-%02d-%02d %02d:%02d:%02d",
+                 $year+1900,$mon+1,$mday,$hour,$min,$sec;
+}
+
+sub num_format {
+  my $x = shift;
+  my @a;
+  my $i = 3;
+  while ($i < length($x)) {
+    push @a, substr($x, -$i, 3);
+    $i += 3;
+  }
+  push @a, substr($x, 0, 3 + length($x) - $i);
+
+  return join '_', reverse @a;
+ #return $x;
+}
+
+sub file_type_format {
+  my $tp = shift;
+  my %type_sym = (8  => 'f',
+                  4  => 'd',
+                  10 => 'l',
+                  12 => 's',
+                  1  => 'p',
+                  2  => 'c',
+                  6  => 'b');
+
+  return $type_sym {$tp};
+}
+
+sub perm_format {
+  my $perm = shift;
+  return sprintf "%04o", $perm;
+}
+
+sub owner_format {
+  my ($uid, $gid) = @_;
+  my $uname = getpwuid($uid);
+  my $gname = getgrgid($gid);
+  return ($uname? $uname : $uid) . ':' . ($gname ? $gname : $gid);
+}
+
+sub rdev_format {
+ return sprintf "%03d,%03d,%03d",
+                 ($_[0] >> 16) & 0xff,
+                 ($_[0] >> 8) & 0xff,
+                  $_[0] & 0xff;
+}
+
+######################################################################
+# обработка клавиатуры
+sub window_press_key {
+  my ($widget, $event, $parameter)= @_;
+  my $key_nr = $event->keyval();
+  my $modif =  $event->state();
+  #  print STDERR "press_key: $key_nr, $modif\n";
+  if ($key_nr ==  0xff0d) {
+    on_start_search();
+    return TRUE;
+  }
+  return FALSE;
+}
+
+# обработка мыши
+sub list_click_handler {
+  my ($widget,$event) = @_;
+  my $button_nr = $event->button;
+  # клик правой кнопкой - показать меню
+  if ($button_nr == 3) {
+    my @sel = $result_list->selected_inx();
+    return TRUE if $#sel > 0;
+  }
+  #двойной клик кнопкой 1 - открываем
+  if ($button_nr == 1 and  $event->type() eq '2button-press') { # 
+    open_handler ();
+  }
+  return FALSE;
+}
+
+sub list_press_key {
+  my ($widget, $event, $parameter)= @_;
+  my $key_nr = $event->keyval();
+  my $key = Gtk2::Gdk->keyval_name ($key_nr);
+  my $modif =  $event->state();
+  #  print "list press key:$key_nr, modif:$modif\n";
+
+  if ($modif & 'control-mask') {
+     open_handler ()     if $key eq 'w'; #ctrl-w
+     clipboard_copy ()   if $key eq 'c'; #ctrl-c
+     clipboard_cut ()    if $key eq 'x'; #ctrl-x
+     delete_handler ()   if $key eq 'd'; #ctrl-d
+     open_dir_handler () if $key eq 'f'; #ctrl-f
+     edit_handler ()     if $key eq 'e' ;#ctrl-e
+     rename_handler ()   if $key eq 'n' ;#ctrl-n
+     copy_to_handler ()  if $key eq 's' ;#ctrl-s
+  }
+
+  # if ($key_nr == 65383) {# контекстное меню
+  #   $menu->popup;
+  #   # без этого меню не всплывает :
+  #   return TRUE;
+  # }
+  return FALSE;
+}
+
+#############################################################################
+# Clipboard
+sub clipboard_copy {
+  my $names = [$result_list->selected_names];
+  my $target_text = {
+      target => 'UTF8_STRING', # some string representing the drag type
+      flags => [], # Gtk2::TargetFlags
+      info => 1,  # some app-defined integer identifier
+  };
+
+  my $target_copy_file = {
+      target => 'x-special/gnome-copied-files',
+      flags => [], # Gtk2::TargetFlags
+      info => 2,  # some app-defined integer identifier
+  };
+
+  # CLIPBOARD - gtk2+
+  my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
+  $clipboard->set_with_data (\&get_func, \&clear_func, $names,
+                             ($target_text, $target_copy_file));
+  $clipboard->store ();
+
+  #"PRIMARY" - X selection
+  $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('PRIMARY', TRUE));
+  $clipboard->set_text (join "\n", @$names);
+}
+
+sub clipboard_cut {
+  my $names = [$result_list->selected_names];
+
+  my $target_copy_file = {
+      target => 'x-special/gnome-copied-files',
+      flags => [], # Gtk2::TargetFlags
+      info => 3,  # some app-defined integer identifier
+  };
+
+  my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
+  $clipboard->set_with_data (\&get_func, \&clear_func, $names,
+                             ($target_copy_file));
+  $clipboard->store();
+}
+
+sub get_func {
+  my ($clipboard, $selectiondata, $info, $names) = @_;
+  my $namestr = "file://" . join ("\nfile://",  @$names);
+
+  if ($info == 1) {
+    $selectiondata->set ($selectiondata->target(), 8, $namestr);
+  }
+  if ($info == 2) {
+    $selectiondata->set ($selectiondata->target(), 8,
+                         "copy\n" . $namestr);
+  }
+  if ($info == 3) {
+    $selectiondata->set ($selectiondata->target(), 8,
+                         "cut\n" . $namestr);
+    $result_list->delete_names (@$names);
+  }
+}
+
+sub clear_func {
+  my ($self, $path) = @_;
+}
+
+#### utils ##########################################################
+# удаление пробелов и замена специальных символов (имена директорий)
+sub rm_sp {
+  my $str = shift;
+  $str =~ s/^\s+//g;
+  $str =~ s/\s+$//g;
+  return $str;
+}
+
+# замена ~/ домашним каталогом
+sub home {
+  my $str = shift;
+  if ($str =~ /^~\//) {
+    $str =~ s/^~/$ENV{HOME}/e;
+  }
+  return $str;
+}
+
+# замена ./ текущим  каталогом
+sub pwd {
+  my $str = shift;
+  if ($str =~ /^\.\//) {
+    $str =~ s/^\./$ENV{PWD}/e;
+  }
+  return $str;
+}
+
+# замена переменной окружения $XXX её значением
+sub envar {
+  my $str = shift;
+  if ($str =~ /^\$.+\//) {
+    my $var = $&;
+    $var =~ s/\/$//;
+    $var =~ s/^\$//;
+    $str =~ s/^\$.+\//$ENV{$var}/e;
+  }
+  return $str;
+}
+
+######################################################################
+package EntryX;
+use Glib qw /TRUE FALSE/;
+use utf8;
+use Gtk2 '-init';
+
+our @ISA;
+BEGIN {
+  @ISA = ('Gtk2::ComboBoxEntry');
+  Gtk2::ComboBoxEntry->import;
+}
+
+sub new {
+  my $class = shift;
+  my $self = Gtk2::ComboBoxEntry->new_text;
+  bless ($self, $class);
+  return $self;
+}
+
+sub text_to_list {
+  my $self = shift;
+  my $str = $self->child->get_text;
+
+  $str =~ s/^\s+//;
+  $str =~ s/\s+$//;
+
+  if ($str) {
+    my $found;
+    my $model = $self->get_model;
+    my $iter  = $model->get_iter_first;
+
+    while ($iter) {
+      if ( $model->get ($iter, 0) eq $str) {
+        $found = 1;
+        return;
+      }
+      $iter = $model->iter_next ($iter);
+    }
+    $self->prepend_text ($str) if not $found;
+  }
+}
+
+sub append {
+  my ($self, $str) = @_;
+  $self->append_text ($str) if $str !~ /(^\s+$)|(^$)/;
+}
+
+sub history {
+  my $self = shift;
+  my $model =  $self->get_model;
+  my $iter = $model->get_iter_first;
+  my @res;
+  while ($iter) {
+    push @res, $model->get ($iter,0);
+    $iter = $model->iter_next ($iter);
+  }
+  return @res;
+}
+
+##############################################################################
+# выбор типов файлов
+package Type_Box;
+
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+sub new {
+ my $class = shift;
+ my $self = {};
+ bless ($self, $class);
+
+ my $hbox = Gtk2::HBox->new();
+ $self->{box} = $hbox;
+ $self->{checks} = [];
+ $self->{types} = [];
+ my ($type, $label);
+ while ($type = shift) {
+   $label = shift;
+   my $cb  = Gtk2::CheckButton->new ($label);
+   $hbox -> pack_start ($cb, FALSE, FALSE, 0);
+   push @{$self->{checks}}, $cb;
+   push @{$self->{types}}, $type;
+ }
+ return  $self;
+}
+
+sub get {
+  my $self = shift;
+  my @res;
+
+  for (my $i = 0; $i <= $#{$self->{checks}}; $i++) {
+    push @res, $self->{types}->[$i] if $self->{checks}->[$i]->get_active;
+  }
+  return @res;
+}
+
+sub box {
+  my $self = shift;
+  return $self->{box};
+}
+##############################################################################
+package File_List;
+
+use utf8;
+use Glib qw/TRUE FALSE/;
+use Gtk2::SimpleList;
+
+sub new {
+ my $class = shift;
+ my $self = {};
+ bless ($self, $class);
+
+ my @desc = (' ', 'text',
+            ::text ('file name'),'text',
+            ::text ('directory'), 'text',
+            ::text ('size'), 'text',
+            ::text ('time'),'text',
+            ::text ('perm'),'text',
+            ::text ('owner'),'text',
+            ' ','text');
+
+ my @align = (0, 0, 0, 1, 0, 0 ,0, 0);
+
+ my $list = Gtk2::SimpleList -> new (@desc);
+
+ for (my $i = 0; $i < $#desc/2; $i++) {
+   my $clm = $list -> get_column ($i);
+   ($clm -> get_cell_renderers())[0] ->set('xalign', $align[$i]);
+    $clm->set_clickable(TRUE);
+    $clm->set_resizable(TRUE);
+    $clm->set_sort_column_id($i);
+ }
+ $list->get_selection->set_mode ('multiple');
+ $list->get_model->set_sort_func(3, \&File_List::sort_int, 3);# sort size
+
+ my $scroll = Gtk2::ScrolledWindow->new;
+ $scroll -> set_policy ('automatic', 'automatic');
+ $scroll -> add ($list);
+ $self->{list} = $list;
+ $self->{box} = $scroll;
+ return  $self;
+}
+
+sub click_handler {
+  my ($self, $handler) = @_;
+  $self->{list}->signal_connect('button-press-event' => $handler);
+}
+
+sub key_press_handler {
+  my ($self, $handler) = @_;
+  $self->{list}->signal_connect('key-press-event' => $handler);
+}
+
+sub clear {
+  my $self = shift;
+  $self->{list}->get_model->clear;
+}
+
+# добавление результата в список найденного
+sub add {
+  my ($self, $name, $dir, $type, $size, $time, $perm, $owner, $info) = @_;
+
+  push @{$self->{list}->{data}}, [
+                                 $type,
+                                 $name,
+                                 $dir,
+                                 $size,
+                                 $time,
+                                 $perm,
+                                 $owner,
+                                 $info
+                                ];
+}
+
+sub selected_inx {
+  my $self = shift;
+  my @sel = $self->{list}->get_selected_indices;
+  return @sel;
+}
+
+sub selected_names {
+  my $self = shift;
+  my @sel = $self->selected_inx();
+  my @names;
+  for my $inx (@sel) {
+    push (@names, @{$self->{list}->{data}}[$inx]->[2]
+	             . '/' . @{$self->{list}->{data}}[$inx]->[1]);
+  }
+  return @names;
+}
+
+sub selected_list {
+  my $self = shift;
+  my @sel = $self->selected_inx();
+  my @names;
+  for my $inx (@sel) {
+    push (@names, {dir  => @{$self->{list}->{data}}[$inx]->[2],
+                   file => @{$self->{list}->{data}}[$inx]->[1],
+                   inx  => $inx});
+  }
+  return @names;
+}
+
+sub delete_items {
+  my ($self, @inxes) = @_;
+  #удаляем с конца - чтобы не портить меньшие индексы
+  @inxes = reverse sort @inxes;
+  for my $i (@inxes) {
+    splice @{$self->{list}->{data}}, $i, 1;
+  }
+}
+
+sub delete_names {
+  my ($self, @names) = @_;
+  my @nx;
+
+  for my $name (@names) {
+    my $model = $self->{list}->get_model;
+    my $iter = $model->get_iter_first;
+
+    while (defined $iter) {
+      my $l_name = $model->get_value ($iter, 1);
+      my $l_dir =  $model->get_value ($iter, 2);
+
+      if ("$l_dir/$l_name" eq $name
+	  or index ($l_dir, $name) == 0) { # $name - directory
+        my $next = $model->iter_next ($iter);
+
+	$model->remove ($iter);
+        $iter = $next;
+      }
+      else {$iter = $model->iter_next ($iter)}
+    }
+  }
+}
+
+sub rename_file {
+  my ($self, $inx, $name) = @_;
+  @{$self->{list}->{data}}[$inx]->[1] = $name;
+}
+
+sub grab_focus {
+  my $self = shift;
+  $self->{list}->grab_focus;
+}
+
+sub box {
+  my $self = shift;
+  return $self->{box};
+}
+
+
+sub sort_int
+{
+  my $col_num = pop;
+  my ($list, @iter) = @_;
+  @iter = map {$_ = $list->get($_, $col_num); $_=~s/_//g; $_} @iter;
+  return ($iter[0] <=> $iter[1]);
+}
+
+sub row_count {
+  my $self = shift;
+  return $#{$self->{list}->{data}}+1;
+}
+##############################################################################
+package Name_Box;
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+our @ISA;
+BEGIN {
+  @ISA = ('EntryX');
+  EntryX->import;
+}
+
+sub new {
+  my $class = shift;
+  my $hbox = Gtk2::HBox->new;
+  my $self = EntryX->new;
+
+  $hbox->pack_start ($self, TRUE, TRUE, 0);
+
+  my $regexp_cb = Gtk2::CheckButton->new (::text ("regexp"));
+  $regexp_cb->set_active (TRUE);
+  $hbox->pack_start ($regexp_cb, FALSE, FALSE, 0);
+
+  my $case_cb = Gtk2::CheckButton->new (::text ("case-sensitive"));
+  $case_cb->set_active (FALSE);
+  $hbox->pack_start ($case_cb, FALSE, FALSE, 0);
+
+  $self->{case} = $case_cb;
+  $self->{regexp} = $regexp_cb;
+  $self->{box} = $hbox;
+  bless ($self, $class);
+  return  $self;
+}
+
+sub get {
+  my $self = shift;
+  return (name   => $self->child->get_text,
+	  regexp => $self->{regexp}->get_active,
+	  case   => $self->{case}->get_active);
+}
+
+sub set {
+  my ($self, $str, $regexp, $case) = @_;
+  $self->child->set_text ($str);
+  $self->child->set_position (length $str);
+  $self->{regexp}->set_active ($regexp);
+  $self->{case}->set_active ($case);
+}
+
+sub set_pos {
+  my ($self, $pos) = @_;
+  $self->child->set_position ($pos);
+}
+
+sub box {
+  my $self = shift;
+  return $self ->{box};
+}
+
+
+##############################################################################
+package Grep_Box;
+
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+our @ISA;
+BEGIN {
+  @ISA = ('EntryX');
+  EntryX->import;
+}
+
+sub new {
+  my $class = shift;
+  my $self = {};
+
+  my $hbox = Gtk2::HBox->new;
+  $self = EntryX->new;
+  $hbox -> pack_start ($self, TRUE, TRUE, 0);
+
+  my $case = Gtk2::CheckButton->new (::text ("case-sensitive"));
+  $hbox -> pack_start ($case, FALSE, FALSE, 0);
+
+  $self->{case} = $case;
+  $self->{box} = $hbox;
+  bless ($self, $class);
+  return  $self;
+}
+
+sub init {
+  my $self = shift;
+  my $case = shift;
+  $self->child->set_text ('');
+  $self->{case}->set_active ($case);
+}
+
+sub get {
+  my $self = shift;
+  my $str = $self->child->get_text;
+  my $cmd;
+  if ($str) {
+    return (re=> $self->child->get_text,  case=> $self->{case}->get_active);
+  }
+  return (re=>undef, case=>undef);
+}
+
+sub box {
+  my $self = shift;
+  return $self ->{box};
+}
+
+#############################################################
+package Exec_Box;
+
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+our @ISA;
+BEGIN {
+  @ISA = ('EntryX');
+  EntryX->import;
+}
+
+sub new {
+  my $class = shift;
+  my $hbox = Gtk2::HBox->new;
+  my $lb = Gtk2::Label->new (::text ("Command"));
+
+  $hbox -> pack_start ($lb, FALSE, FALSE, 0);
+
+  my $self = EntryX->new;
+  $hbox->pack_start ($self, TRUE, TRUE, 0);
+
+  my $butt = Gtk2::Button->new (::text ("Execute"));
+  $hbox -> pack_start ($butt, FALSE, FALSE, 0);
+  $self->{box} = $hbox;
+  $self->{button} = $butt;
+  bless ($self, $class);
+
+  return  $self;
+}
+
+sub set_handler {
+  my ($self, $handler) = @_;
+  $self->{button}->signal_connect (clicked => $handler);
+}
+
+sub init {
+  my $self = shift;
+  $self->child->set_text ('');
+}
+
+sub box {
+  my $self = shift;
+  return $self ->{box};
+}
+
+sub cmd {
+  my $self = shift;
+  return  $self->child->get_text;
+}
+
+############################################################################
+package Time_Box;
+
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+sub new {
+  my $class = shift;
+  my $self = {};
+  bless ($self, $class);
+
+  my $hbox = Gtk2::HBox->new;
+  my $less_more = Gtk2::ComboBox->new_text;
+  $less_more->append_text ('<');
+  $less_more->append_text ('>');
+  $less_more->set_size_request (48, -1);
+  $hbox->pack_start ($less_more, FALSE, FALSE, 0);
+
+
+  my $entry = Gtk2::Entry->new;
+  $hbox -> pack_start ($entry, FALSE, FALSE, 0);
+
+  $entry->set_size_request (48);
+
+  my $unit = Gtk2::ComboBox->new_text;
+  $unit->append_text ('day');
+  $unit->append_text ('hour');
+  $unit->append_text ('min');
+  $unit->set_size_request (64, -1);
+  $hbox->pack_start ($unit, FALSE, FALSE, 0);
+
+
+  $self->{entry} = $entry;
+  $self->{less_more} = $less_more;
+  $self->{unit} = $unit;
+  $self->{box} = $hbox;
+  return $self;
+}
+
+sub get {
+  my $self = shift;
+  my $res = $self->{entry}->get_text;
+  if ($res =~ /^\d+$/) {
+    $res *= 60;
+    my $u = $self->{unit}->get_active_text;
+    $res *= 60*24  if $u eq 'day';
+    $res *= 60     if $u eq 'hour';
+  }
+  return ($res, $self->{less_more}->get_active_text);
+}
+
+sub init {
+  my $self = shift;
+  $self->{entry}->set_text ('');
+  $self->{unit}->set_active (FALSE);
+  $self->{less_more}->set_active (FALSE);
+}
+
+sub box {
+  my $self = shift;
+  return $self->{box};
+}
+##############################################################################
+package Size_Box;
+
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+sub new {
+  my $class = shift;
+  my $self = {};
+  bless ($self, $class);
+
+  my $hbox = Gtk2::HBox->new;
+  my  $sep = Gtk2::VSeparator->new;
+  $hbox->pack_start ($sep, FALSE, TRUE, 0);
+
+
+  my $label = Gtk2::Label->new (::text ('size') . ' >');
+  $hbox -> pack_start ($label, FALSE, FALSE, 0);
+
+  my $min = Gtk2::Entry->new;
+  $hbox -> pack_start ($min, FALSE, FALSE, 0);
+  $min->set_size_request (48,-1);
+
+  $label = Gtk2::Label->new (" <");
+  $hbox -> pack_start ($label, FALSE, FALSE, 0);
+
+  my $max = Gtk2::Entry->new;
+  $hbox -> pack_start ($max, FALSE, FALSE, 0);
+  $max->set_size_request (48,-1);
+
+  my $unit = Gtk2::ComboBox->new_text;
+  $unit->append_text ('b');
+  $unit->append_text ('kb');
+  $unit->append_text ('Mb');
+  $unit->set_active (1);
+  $unit->set_size_request (48, -1);
+  $hbox->pack_start ($unit, FALSE, FALSE, 0);
+
+  $self->{max} = $max;
+  $self->{min} = $min;
+  $self->{unit} = $unit;
+  $self->{box} = $hbox;
+  return $self;
+}
+
+sub get {
+  my $self = shift;
+  my $min = $self->{min}->get_text;
+  my $max = $self->{max}->get_text;
+  my $u = unit ($self);
+
+  if ($min =~ /^\d+$/) {
+    $min *= $u;
+  }
+  else {undef $min};
+
+  if ($max =~ /^\d+$/) {
+    $max *= $u;
+  }
+  else {undef $max};
+
+  return (min => $min, max => $max);
+}
+
+sub init {
+  my $self = shift;
+  $self->{unit}->set_active (1);
+  $self->{min}->set_text('');
+  $self->{max}->set_text('');
+}
+
+sub unit {
+  my $self = shift;
+  my $str = $self->{unit}->get_active_text;
+  return 1 if $str eq 'b';
+  return 1024 if $str eq 'kb';
+  return 1024*1024 if $str eq 'Mb';
+}
+
+sub box {
+  my $self = shift;
+  return $self->{box};
+}
+
+######################################################################
+package Menu;
+use utf8;
+
+sub create {
+  my $menu = Gtk2::Menu->new;
+
+  $menu->append(Gtk2::TearoffMenuItem->new);
+  my ($item, $name, $handler);
+  while ($name = shift) {
+    $handler = shift;
+    if ($name =~ /^-+$/) {
+      $item = Gtk2::SeparatorMenuItem->new();
+    }
+    else {
+      $item = Gtk2::MenuItem->new_with_label ($name);
+      $item->signal_connect ('activate' => $handler);
+    }
+    $menu->append ($item);
+  }
+  $menu->show_all;
+  return $menu;
+}
+# END Menu ###########################################################
+package Dir_Box;
+
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+our @ISA;
+BEGIN {
+  @ISA = ('EntryX');
+  EntryX->import;
+}
+
+sub new {
+  my $class = shift;
+  my $self = {};
+  $self = EntryX->new;
+  bless ($self, $class);
+  return  $self;
+}
+
+sub dialog_run {
+  my $self = shift;
+  my $caption = "Directory";
+  my $res;
+
+  my $dialog = Gtk2::FileChooserDialog->new
+    ('Выбор ' . $caption,
+     undef,
+     'select-folder',
+     'gtk-ok'     => 'ok',
+     'gtk-cancel' => 'cancel');
+
+  $dialog->set_current_folder ($self->child->get_text);
+
+  my $filter = Gtk2::FileFilter->new;
+  $filter->add_mime_type ('inode/directory');
+  $dialog->set_filter ($filter);
+  my $response = $dialog->run;
+  $res = $response eq 'ok' ? $dialog->get_filename : '';
+  $dialog->destroy;
+  $self->child->set_text ($res) if $res;
+  return $res;
+}
+
+sub get {
+  my $self = shift;
+  my $path = ::envar (::pwd (::home (::rm_sp ($self->child->get_text))));
+  set ($self, $path);
+  return $path;
+}
+
+sub set {
+  my ($self, $str) = @_;
+  $self->child->set_text ($str);
+}
+# END Dir_Box ########################################################
+
+package main;
+
+
+
+BEGIN {
+  $icon_data =<<END_ICON;
+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
+TkSuQmCC
+END_ICON
+
+   %local_text = ('Open' => {ru => 'Открыть'},
+		  'Editor' => {ru => 'Редактор'},
+		  'Open dir' => {ru => 'Открыть каталог'},
+		  'Copy' => {ru => 'Копировать'},
+		  'Cut' => {ru => 'Вырезать'},
+		  'Delete' => {ru => 'Удалить'},
+		  'Rename' => {ru => 'Переименовать'},
+		  'Copy to ..' => {ru => 'Копировать в ..'},
+		  'Start' => {ru => 'Искать'},
+		  'Stop' => {ru => 'Прервать'},
+		  'Reset' => {ru => 'Очистить'},
+                  'Help'  => {ru => 'Справка'},
+		  'Close' => {ru => 'Закрыть'},
+		  'file name' => {ru => 'имя файла'},
+		  'directory' => {ru => 'каталог'},
+		  'modify time' => {ru => 'время изменения'},
+		  'file types' => {ru => 'тип файла'},
+		  'text (regexp)' => {ru => 'текст (рег.выраж)'},
+		  'size' => {ru => 'размер'},
+		  'time' => {ru => 'время'},
+		  'perm' => {ru => 'права'},
+		  'owner' => {ru => 'владелец'},
+		  'case-sensitive' => {ru => 'учёт регистра'},
+		  'regexp' => {ru => 'рег.выраж'},
+		  'Delete file (dir, reqursive)?' => {ru => 'Удалить (рекусивно) файлы и каталоги?'},
+		  'Delete file error' => {ru => 'Ошибка удаления файла'},
+		  'Rename error' => {ru => 'Ошибка переименования файла'},
+		  'Command' => {ru => 'Команда'},
+		 'Execute' => {ru => 'Выполнить'},
+		 );
+
+  %help_text = (en => [
+		       {title => 'File name',
+			text  =>
+"Set check regexp have been used Perl reg-exp syntax"
+		       }
+
+		      ],
+		ru => [
+		       {title =>'Имя файла',
+			text  =>
+"При установке флажка 'рег.выраж' использовать синтаксис регулярных выражений Perl, "
+. "в противном случае, простое совпадение части имени с образцом.
+Флажок 'учёт регистра' в обоих случаях требует совпадения также и с регистром символов шаблона."
+		       },
+
+		       {title => 'Время изменения файла',
+			text  =>
+"Выбрать файлы, изменённые ранее (<) или позднее (>) "
+. "момента в прошлом, отстоящего от текущего на указанное кол-во дней, часов или минут."
+		       },
+
+		       {title => 'Размер',
+			text  =>
+"Поиск с учётом размера файла в рамках указанных ограничений, "
+."если они отсутствуют - файлы любого размера."
+. "\nЕсли указана только верхняя граница - файлы с размером меньше верхней границы,"
+. "\nЕсли  указана только нижняя граница - файлы больше этой границы."
+		      },
+		       {title => 'Тип файла',
+			text  =>
+"Если не установлен ни один флажок - файлы любого типа,"
+. " иначе - только указанных типов."
+		       },
+		       {title => 'Команда',
+			text  =>
+"Выполнить произвольную команду для выделенных файлов,
+в качестве аргументов могут быть использованы переменные окружения:
+\t\$f\tимя выделенного файла
+\t\$p\tимя выделенного файла с полным путём
+\t\$d\tкаталог (путь без имени)
+При наличии пробелов или специальных символов переменные нужно заключать в кавычки."}
+		      ]);
+}

@@ -1,0 +1,1023 @@
+#!/usr/bin/perl
+######################################################################
+# Copyright (c) 2014 Turishev Evgeniy <ew_turi@mail.ru>
+# This file is licensed under the GNU General Public License version 3
+# or any later version.
+#######################################################################
+
+my $main_title  = 'dir-comp';
+my $open_helper = 'exo-open';
+my $editor      ='leafpad';
+
+##############################################################################
+{
+  package Result_List;
+
+  use utf8;
+  use Glib qw/TRUE FALSE/;
+  use Gtk2::SimpleList;
+  use File::Basename;
+
+  my @clmns = ({id=>'name',    caption=>::text ('name'),  type=>'text', align=> 0},
+	       {id=>'diff',    caption=>::text ('diff'),  type=>'text', align=> 0.5},
+	       {id=>'a_cp',    caption=>'A->B',  type=>'bool', align=> 0.5},
+	       {id=>'a_del',   caption=>'del A', type=>'bool', align=> 0.5},
+	       {id=>'b_cp',    caption=>'B->A',  type=>'bool', align=> 0.5},
+	       {id=>'b_del',   caption=>'del B', type=>'bool', align=> 0.5},
+	       {id=>'type_a',  caption=>::text ('type A'),type=>'text', align=> 0.5},
+	       {id=>'type_b',  caption=>::text ('type B'),type=>'text', align=> 0.5},
+	       {id=>'size_a',  caption=>::text ('size A'),type=>'text', align=> 1},
+	       {id=>'size_b',  caption=>::text ('size B'),type=>'text', align=> 1},
+	       {id=>'time_a',  caption=>::text ('time A'),type=>'text', align=> 0},
+	       {id=>'time_b',  caption=>::text ('time B'),type=>'text', align=> 0},
+	       {id=>'perm_a',  caption=>::text ('perm A'),type=>'text', align=> 0},
+	       {id=>'perm_b',  caption=>::text ('perm B'),type=>'text', align=> 0},
+	       {id=>'owner_a', caption=>::text ('own A'), type=>'text', align=> 0},
+	       {id=>'owner_b', caption=>::text ('own B'), type=>'text', align=> 0});
+
+  my %clm; # index columns numbers on id
+  for (my $i=0; $i <= $#clmns; $i++) {
+    $clm{$clmns[$i]{id}} = $i;
+  }
+
+  my $list;
+  my $scroll;
+
+  $list = Gtk2::SimpleList->new (map {($_->{caption}, $_->{type})} @clmns);
+
+  for (my $i = 0; $i <= $#clmns; $i++) {
+    my $clm = $list -> get_column ($i);
+    $clm->set_clickable(TRUE);
+    $clm->set_resizable(TRUE);
+    $clm->set_sort_column_id($i);
+
+    $clm->signal_connect('clicked', Result_List::click_column_hnd);
+    my $r = $clm->get_cell_renderers;
+    $r->set('xalign', $clmns[$i]{align});
+    if ($clmns[$i]{type} eq 'bool') {
+      $r->signal_connect ('toggled' => Result_List::check_box_hnd);
+    }
+  }
+
+  $list->get_selection->set_mode ('multiple');
+  $list->get_model->set_sort_func (8, \&Result_List::sort_int, 8);# sort size A
+  $list->get_model->set_sort_func (9, \&Result_List::sort_int, 9);# sort size B
+
+  $scroll = Gtk2::ScrolledWindow->new;
+  $scroll -> set_policy ('automatic', 'automatic');
+  $scroll -> add ($list);
+
+  $list->signal_connect('button-press-event' => sub {
+			  my ($widget,$event) = @_;
+			  if ($event->button == 3) {
+			    my @sel = Result_List::selected_inx();
+			    return TRUE if $#sel > 0;
+			    # not propogate event in list
+			  }
+			  else {FALSE};});
+
+  sub sort_int {
+    my $col_num = pop;
+    my ($list, @iter) = @_;
+    @iter = map {$_ = $list->get($_, $col_num); $_=~s/_//g; $_} @iter;
+    return ($iter[0] <=> $iter[1]);
+  }
+
+  sub click_column_hnd {
+    my ($widget, $data) = @_;
+    # print "click_column_hnd\n";
+  }
+
+  sub check_box_hnd {
+    my ($renderer, $row) = @_;
+    my $col = $renderer->{column_index};
+
+    my $model = $list->get_model;
+
+    if (($col == $clm{a_cp} or $col == $clm{a_del})
+	and $list->{data}->[$row]->[$clm{diff}] eq 'B') {
+      $list->{data}->[$row]->[$clm{a_cp}] = 0;
+      $list->{data}->[$row]->[$clm{a_del}] = 0;
+      return;
+    }
+    if (($col == $clm{b_cp} or $col == $clm{b_del})
+	and $list->{data}->[$row]->[$clm{diff}] eq 'A') {
+      $list->{data}->[$row]->[$clm{b_cp}] = 0;
+      $list->{data}->[$row]->[$clm{b_del}] = 0;
+      return;
+    }
+
+    my @sel = selected_inx();
+
+    if ($#sel > 0 and  $row >= $sel[0] and $row <= $sel[$#sel]) {
+      for my $i (@sel) {
+	if ($i != $row) {
+	  $list->{data}->[$i]->[$col] = ! ($list->{data}->[$i]->[$col]);
+	}
+      }
+    }
+  }
+
+  sub clear {
+    $list->get_model->clear;
+  }
+
+  # добавление результата в список найденного
+  sub add {
+    my ($name, $info_a, $info_b) = @_;
+    my ($status);
+
+    $name =~ s/^\///;
+
+    if (! $info_a->{type}) {
+      $status = 'B';
+    }
+    elsif (! $info_b->{type}) {
+      $status = 'A';
+    }
+    else {
+      $status = ($info_a->{type} ne $info_b->{type} ? 't':'')
+      . ($info_a->{size} ne $info_b->{size} ?'s':'')
+        . ($info_a->{mtime} ne  $info_b->{mtime} ?'d':'')
+          . ($info_a->{perm} ne  $info_b->{perm} ?'p':'')
+            . ($info_a->{owner} ne  $info_b->{owner} ?'o':'')
+              . (exists ($info_a->{content}) ? 'c':'');
+    }
+    my @data;
+    $data[$clm{name}]    = $name;
+    $data[$clm{diff}]    = $status;
+    $data[$clm{type_a}]  = $info_a->{type};
+    $data[$clm{type_b}]  = $info_b->{type};
+    $data[$clm{size_a}]  = $info_a->{size};
+    $data[$clm{size_b}]  = $info_b->{size};
+    $data[$clm{time_a}]  = $info_a->{ctime};
+    $data[$clm{time_b}]  = $info_b->{ctime};
+    $data[$clm{perm_a}]  = $info_a->{perm};
+    $data[$clm{perm_b}]  = $info_b->{perm};
+    $data[$clm{owner_a}] = $info_a->{owner};
+    $data[$clm{owner_b}] = $info_b->{owner};
+    $data[$clm{a_del}]   = FALSE;
+    $data[$clm{b_del}]   = FALSE;
+    $data[$clm{a_cp}]    = FALSE;
+    $data[$clm{b_cp}]    = FALSE;
+
+    push @{$list->{data}}, [@data];
+  }
+
+  sub selected_inx_0 {
+    my @sel = $list->get_selected_indices();
+    return $sel[0];
+  }
+
+  sub selected_inx {
+    return $list->get_selected_indices();
+  }
+
+  # имя выбранного файла
+  sub selected_name {
+    my $inx = selected_inx_0();
+    return @{$list->{data}}[$inx]->[$clm{name}];
+  }
+
+  sub diff_type {
+    my $inx = shift;
+    return @{$list->{data}}[$inx]->[$clm{diff}];
+  }
+
+  sub name {
+    return @{$list->{data}}[shift]->[$clm{name}];
+  }
+
+  sub row {
+    my $inx = shift;
+    return map {$_ => @{$list->{data}}[$inx]->[$clm{$_}]} keys %clm;
+  }
+
+  sub delete_item {
+    my $n = shift;
+    splice @{$list->{data}}, $n, 1;
+  }
+
+  sub grab_focus {
+    $list->grab_focus;
+  }
+
+  sub row_count {
+    return $#{$list->{data}} + 1;
+  }
+
+  sub box {
+    return $scroll;
+  }
+}
+
+# END Result_List ####################################################
+
+package Menu;
+use utf8;
+use Glib qw/TRUE FALSE/;
+use Data::Dumper;
+
+sub create {
+  my $menu = Gtk2::Menu->new;
+
+ # $menu->append (Gtk2::TearoffMenuItem->new);
+  my ($item, $name, $handler);
+  while ($name = shift) {
+    $handler = shift;
+    if ($name =~ /^-+$/) {
+      $item = Gtk2::SeparatorMenuItem->new ();
+    }
+    else {
+      $item = Gtk2::MenuItem->new_with_label (::text ($name));
+      $item->signal_connect ('activate' => $handler);
+      $item->set_property ('name', $name);
+    }
+    $menu->append ($item);
+  }
+  $menu->signal_connect ('hide' => \&Menu::hide);
+  $menu->show_all;
+  return $menu;
+}
+
+sub show {
+  my ($menu, $dtype) = @_;
+  my @list = $menu->get_children;
+
+  if ($dtype eq 'A' or $dtype eq 'B') {
+    $dtype = ($dtype eq 'A' ? 'B' : 'A');
+    my $rx = qr/\s$dtype/;
+
+    for my $i (@list) {
+      if ($i->get_property ('name') =~ $rx) {
+    	$i->set_sensitive (FALSE);
+      }
+    }
+  }
+
+  $menu->popup (undef, undef, undef, undef, 0, 0);
+}
+
+sub hide {
+  my ($menu, $event) = @_;
+  my @list = $menu->get_children;
+  for my $i (@list) {
+    $i->set_sensitive (TRUE);
+  }
+}
+
+# END Menu ###########################################################
+
+package Dir_Box;
+
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+sub new {
+  my ($class, $lab) = @_;
+  my $self = {};
+  bless ($self, $class);
+
+  my $hbox = Gtk2::HBox->new();
+  my $butt = Gtk2::Button->new ($lab);
+  $butt->set_size_request(40);
+  $hbox -> pack_start ($butt, FALSE, TRUE, 0);
+  my $entry = Gtk2::Entry->new;
+  $hbox -> pack_start ($entry, TRUE, TRUE, 0);
+
+  $butt->signal_connect (clicked => sub {
+                           my $res = Dir_Box::dialog_run ($lab);
+                           $entry->set_text ($res) if $res;
+                         }
+                        );
+
+  $self->{entry} = $entry;
+  $self->{box} = $hbox;
+  $self->{label}=$lab;
+  return  $self;
+}
+
+sub select_dir {
+  my $self = shift;
+  my $res = Dir_Box::dialog_run ($self->{label});
+  $self->{entry}->set_text ($res) if $res;
+}
+
+sub dialog_run {
+  my $caption = shift;
+  my $res;
+
+  my $dialog = Gtk2::FileChooserDialog->new
+    ('Выбор ' . $caption,
+     undef,
+     'select-folder',
+     'gtk-ok'     => 'ok',
+     'gtk-cancel' => 'cancel');
+
+  my $filter = Gtk2::FileFilter->new;
+  $filter->add_mime_type ('inode/directory');
+  $dialog->set_filter ($filter);
+  my $response = $dialog->run;
+  $res = $response eq 'ok' ? $dialog->get_filename : '';
+  $dialog->destroy;
+  return $res;
+}
+
+sub set_handler {
+  my ($self, $handler) = @_;
+  $self->{entry}->signal_connect ('changed' => $handler);
+}
+
+sub get {
+  my $self = shift;
+  my $path = ::envar (::pwd (::home (::rm_sp ($self->{entry}->get_text))));
+  set ($self, $path);
+  return $path;
+}
+
+sub set {
+  my ($self, $str) = @_;
+  $self->{entry}->set_text ($str);
+}
+
+sub box {
+  my $self = shift;
+  return $self ->{box};
+}
+
+sub focus {
+  my $self = shift;
+  return $self ->{entry}->grab_focus;
+}
+# END Dir_Box ########################################################
+
+##  main #############################################################
+package main;
+use Encode;
+use Glib qw /TRUE FALSE/;
+use utf8;
+use open ':utf8';
+use Gtk2 '-init';
+use File::Copy;
+use File::Path;
+use File::Basename  qw/dirname/;;
+use MIME::Base64 qw(decode_base64);
+use File::Compare;
+
+my ($start_dir_1, $start_dir_2);
+
+
+
+my $dir_box_a;
+my $dir_box_b;
+my $chk_date;
+my $chk_content;
+my $chk_size;
+my $main_window = create_window ();
+init_controls ();
+
+Gtk2->main;
+0;
+
+######################################################################
+sub create_window {
+  my $icon_pixbuf;
+
+  eval {
+    my $raw_data = decode_base64 ($icon_data);
+    my $pixbufloader = Gtk2::Gdk::PixbufLoader->new;
+    $pixbufloader->write ($raw_data);
+    $pixbufloader->close;
+    $icon_pixbuf = $pixbufloader->get_pixbuf;
+  };
+  if ($@) {
+    print STDERR "error create icon\n";
+  }
+  undef $icon_data;
+
+  my $window = Gtk2::Window->new ('toplevel');
+  $window->signal_connect (destroy => on_exit);
+  $window->set_border_width (5);
+  $window->set_title ($main_title);
+  $window->set_size_request (640, 480);
+
+  my $mainbox = Gtk2::VBox->new ();
+
+  $dir_box_a = Dir_Box->new ('A:');
+  $dir_box_b = Dir_Box->new ('B:');
+
+  $mainbox->pack_start ($dir_box_a->box, FALSE, FALSE, 0);
+  $mainbox->pack_start ($dir_box_b->box, FALSE, FLASE, 0);
+
+  # кнопки управления
+  my $hbox = Gtk2::HBox->new(TRUE);
+  my $butt;
+
+  $butt = Gtk2::Button->new (text ('Compare'));
+  $butt->signal_connect (clicked => start_compare, $window);
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+
+  $chk_size = Gtk2::CheckButton->new (text ('comp size'));
+  $chk_size->set_active (TRUE);
+  $hbox -> pack_start ($chk_size, FALSE, FALSE, 0);
+
+  $chk_date = Gtk2::CheckButton->new (text ('comp time'));
+  # $chk_date->set_active (TRUE);
+  $hbox -> pack_start ($chk_date, FALSE, FALSE, 0);
+
+  $chk_content = Gtk2::CheckButton->new (text ('comp content'));
+  $hbox -> pack_start ($chk_content, FALSE, FALSE, 0);
+
+  $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
+
+  my $menu = Menu::create ('Open A', sub {open_handler('a')},
+			   'Open B', sub {open_handler('b')},
+			   '---',0,
+			   'Copy A to clipboard', sub {clipboard_copy('a')},
+			   'Copy B to clipboard', sub {clipboard_copy('b')},
+			   '---',0,
+			   'diff A and B', diff_files,
+			   'comp A and B content ', comp_content);
+
+  #EventBox нужен для корректного позиционировани контекстного меню
+  my $eventbox = Gtk2::EventBox->new();
+  #$eventbox->set_above_child (TRUE);
+
+  $eventbox->signal_connect('button-release-event' => \&menu_popup, $menu);
+  # Result_List использует событие 'button-press-event' для выделения строк
+  # его перехватывать нельзя, перехватываем только 'button-release-event'
+
+  $eventbox->add (Result_List::box());
+
+  $mainbox->pack_start ($eventbox, TRUE, TRUE, 0);
+  # кнопки управления
+  $hbox = Gtk2::HBox->new(TRUE);
+
+  $butt = Gtk2::Button->new (text ('Execute operations'));
+  $butt->signal_connect (clicked => operation_do, $window);
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+
+  $butt =  Gtk2::Button->new (text ('Exit'));
+  $butt->signal_connect (clicked => on_exit, $window);
+  $hbox -> pack_start ($butt, TRUE, TRUE, 0);
+
+  $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
+
+  $window->signal_connect ('key-press-event' => window_press_key);
+
+  $window -> add ($mainbox);
+  $window -> show_all;
+  # после $main_window->show_all !!
+  $window->set_icon ($icon_pixbuf);
+
+  return $window;
+}
+
+sub init_controls {
+  Result_List::clear();
+  $dir_box_a ->set($ENV{PWD});
+  $dir_box_b ->set($ENV{PWD});
+  $dir_box_a->focus;
+}
+
+sub show_msg {
+  my ($type, $text) = @_;
+  my $butt = 'ok';
+
+  if ($type eq 'question') {
+    $butt = 'yes-no';
+  }
+  my $dialog = Gtk2::MessageDialog->new ($main_window,
+                                         'destroy-with-parent',
+                                         $type, # message type
+                                         $butt, # which set of buttons?
+                                         text ($text));
+
+  if ($dialog->run eq 'yes') {
+    $dialog->destroy;
+    return 1;
+  }
+  else {
+    $dialog->destroy;
+    return 0;
+  }
+}
+
+##############################################################################
+sub name_str {
+  my $namestr = "";
+  for my $nm (@_) {
+    $nm =~ s/"/\\\"/g;
+    $namestr .= " \"$nm\"";
+  }
+  return $namestr;
+}
+
+sub del_sp {
+  my $s = shift;
+  $s =~ s/^\s+//;
+  $s =~ s/\s+$//;
+  return $s;
+}
+
+##############################################################################
+# обработчики
+
+sub operation_do {
+  #print "operation_do\n";
+  my ($err_oper, $err_del, $err_copy, $err_move);
+
+  if (! show_msg ('question', 'Execute all operation?')) {
+    return;
+  }
+
+  for (my $i = 0; $i < Result_List::row_count(); $i++) {
+    my %row = Result_List::row ($i);
+
+    my $p1 =  $start_dir_1 . '/' . $row{name};
+    my $p2 =  $start_dir_2 . '/' . $row{name};
+    # print "$p1,$p2\n";
+    if ($row{a_cp} and ! $row{b_cp} and ! $row{b_del}) {
+
+      my $d = dirname($p2);
+
+      if (! -d $d) {
+        my $dirs = eval {mkpath ($d)};
+        print STDERR "Failed to create $d: $@\n" unless $dirs;
+      }
+
+      if (! $row{a_del}) {
+        # copy A->B
+        $err_copy .= "$p1 ->\n$p2\n" if not copy ($p1, $p2);
+      }
+      else {
+        # move A->B
+        $err_move .="$p1 ->\n$p2\n" if not move ($p1, $p2);
+      }
+    }
+    elsif (! $row{a_cp} and ! $row{a_del} and $row{b_cp}) {
+
+      my $d = dirname ($p1);
+
+      if (! -d $d) {
+        my $dirs = eval {mkpath($d)};
+        print STDERR "Failed to create $d: $@\n" unless $dirs;
+      }
+
+      if (! $row{b_del}) {
+        # copy A->B
+        $err_copy .= "$p2 ->\n$p1\n" if not copy ($p2, $p1);
+      }
+      else {
+        # move B->A
+        $err_move .="$p2 ->\n$p1\n" if not move ($p2, $p1);
+      }
+    }
+    elsif (! $row{a_cp} and ! $row{b_cp}) {
+      if ($row{a_del}) {
+        $err_del .= " $p1\n" if not unlink $p1;
+      }
+      if ($row{b_del}) {
+        $err_del .= " $p2\n" if not unlink $p2;
+      }
+    }
+    else {
+      $err_oper .= " $oper{name}\n"
+    }
+  }
+
+  my $err = ($err_oper ? text ("operation ignored") . "\n$err_oper":'')
+    . ($err_copy? text ('copy error') . "\n$err_copy":'')
+    . ($err_move? text ('move error') . "\n$err_move":'')
+    . ($err_del? text ('delete error'). "\n$err_del":'');
+
+
+  if ($err) {
+    show_msg ('error', $err);
+  }
+
+  start_compare();
+}
+
+sub edit_handler {
+  my $name = name_str (Result_List::selected_name());
+  system ("$editor $name &");
+}
+
+sub open_dir_handler {
+  my $name = name_str (Result_List::selected_name());
+  $name =~ s/\/[^\/]+?$//;
+  $name = name_str ($name);
+  system ("$file_manager $name &");
+}
+
+sub open_handler {
+  my $dir;
+  if ($_[0] eq 'a') {
+     $dir = $start_dir_1;
+  }
+  elsif ($_[0] eq 'b') {
+     $dir = $start_dir_2;
+  }
+  else {return};
+
+  my $name = name_str ($dir . '/'. Result_List::selected_name());
+  my $cmd = $open_helper . ' ' . $name;
+  print "$cmd\n";
+  system ($cmd);
+}
+
+sub diff_files {
+  my %row = Result_List::row (Result_List::selected_inx_0());
+
+  if ($row{size_a} > 1E3 or  $row{size_b} > 1E3) {
+    show_msg ("File too big");
+    return;
+  }
+
+  my $path_a =  $dir_box_a->get . '/'. $row{name};
+  my $path_b =  $dir_box_b->get . '/'. $row{name};
+  ( -e $path_a and -e $path_b) or return;
+  system ("diff -u " . name_str ($path_a,$path_b) . " >/tmp/dircmp.diff");
+  system ("$editor /tmp/dircmp.diff");
+}
+
+my @subdirs;
+
+sub create_path_list {
+  my ($start_dir, $dir, $res) = @_;
+
+  if ($dir eq '') {
+    @$res = ();
+    @subdirs = ();
+  }
+
+  opendir (DIR, $start_dir . '/' . $dir);
+  while (my $item = readdir(DIR)) {
+    next if $item =~ /^\.{1,2}$/;
+
+    my $path = $dir . '/' . Encode::decode ("utf-8", $item);
+    if (-d $start_dir . '/' . $path) {
+      push @subdirs, $path;
+    }
+    else {
+      push @$res, $path;
+    }
+  }
+  close DIR;
+
+  create_path_list ($start_dir, shift @subdirs, $res) if (@subdirs);
+}
+
+sub comp_content {
+  my $path_a =  $dir_box_a->get . '/'. Result_List::selected_name();
+  my $path_b =  $dir_box_b->get . '/'. Result_List::selected_name();
+  ( -e $path_a and -e $path_b) or return;
+
+  my $res = (compare ($path_a, $path_b) == 0 ? "Content is equevalent" : "Content is different");
+
+  show_msg ('info', $res);
+}
+
+sub start_compare {
+  my $check_date = $chk_date->get_active;
+  my $check_content  = $chk_content->get_active;
+  my $check_size = $chk_size->get_active;
+
+  ($start_dir_1, $start_dir_2) = ($dir_box_a->get, $dir_box_b->get);
+  my (@path_list_1 ,@path_list_2);
+
+  Result_List::clear();
+
+  $start_dir_1 ne $start_dir_2 || return;
+
+  create_path_list ($start_dir_1, '', \@path_list_1);
+  create_path_list ($start_dir_2, '', \@path_list_2);
+
+  my %not_need_check;
+
+  for my $f (@path_list_1) {
+    if (not -f $start_dir_2 . $f) {
+      my %info_a = get_file_info ($start_dir_1 . $f);
+      Result_List::add ($f, \%info_a, '');
+      $not_need_check {$f} = 1;
+    };
+  }
+
+  for my $f (@path_list_2) {
+    if (not -f $start_dir_1 . $f) {
+      my %info_b = get_file_info ($start_dir_2 . $f);
+      Result_List::add ($f, '', \%info_b);
+    }
+  }
+
+  for my $f (@path_list_1) {
+    if (not exists ($not_need_check {$f})) {
+       my %info_a = get_file_info ($start_dir_1 . $f);
+       my %info_b = get_file_info ($start_dir_2 . $f);
+       my $res = 0;
+
+       if ($info_a{type} ne $info_b{type}
+           or ($check_size and $info_a{size} ne $info_b{size})
+           or ($check_date and $info_a{mtime} ne $info_b{mtime})) {
+          $res = 1;
+       }
+
+       if ($check_content) {
+          if (compare ($start_dir_1 . $f, $start_dir_2 . $f)) {
+            $res = 1;
+            $info_a{content} = 1;
+            $info_b{content} = 1;
+          }
+       }
+       Result_List::add ($f, \%info_a, \%info_b) if $res;
+    }
+  }
+}
+
+sub on_exit {
+  Gtk2->main_quit;
+}
+
+sub menu_popup {
+  my ($widget, $event, $menu) = @_;
+  my @sel = Result_List::selected_inx();
+
+  if ($#sel == 0 and $event->button == 3) {# только для одной строчки
+    Menu::show ($menu, Result_List::diff_type ($sel[0]));
+  }
+}
+
+sub dir_swap_focus {
+  $dir_box_a->focused ? $dir_box_b->focus : $dir_box_a->focus;
+}
+
+######################################################################
+# обработка клавиатуры
+sub window_press_key {
+  my ($widget, $event, $parameter)= @_;
+  my $key_nr = $event->keyval();
+  my $modif =  $event->state();
+
+  if ($modif >= ['control-mask'] and $key_nr == 113) { #ctrl-q
+    Gtk2->main_quit;
+  }
+  return FALSE;
+}
+
+sub get_file_info {
+  my $name = shift;
+  my @par = lstat ($name);
+  #print Encode::encode('utf-8',$name), ", par:@par\n";
+  #               0 dev      device number of filesystem
+  #               1 ino      inode number
+  #               2 mode     file mode  (type and permissions)
+  #               3 nlink    number of (hard) links to the file
+  #               4 uid      numeric user ID of file's owner
+  #               5 gid      numeric group ID of file's owner
+  #               6 rdev     the device identifier (special files only)
+  #               7 size     total size of file, in bytes
+  #               8 atime    last access time in seconds since the epoch
+  #               9 mtime    last modify time in seconds since the epoch
+  #              10 ctime    inode change time in seconds since the epoch (*)
+  #              11 blksize  preferred block size for file system I/O
+  #              12 blocks   actual number of blocks allocated
+
+  my $type = file_type_format ($par[2] >> 12);
+  my $info;
+  if ($type eq 'l') {
+    $info = "-> ". readlink ($name);
+  }
+  if ($type eq 'c' or $type eq 'b') {
+    $info = rdev_format ($par[6]);
+  }
+  return (type  => $type,
+          size  => num_format($par[7]),
+          ctime => time_format($par[10]),
+          mtime => time_format($par[9]),
+          perm  => perm_format($par[2] & 07777),
+          owner => owner_format($par[4], $par[5]),
+          other => $info);
+}
+
+# функции форматирования данных для вывода
+sub time_format {
+  my $tm = shift;
+  my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst)
+    = localtime($tm);
+
+  return sprintf "%4d-%02d-%02d %02d:%02d:%02d",
+                 $year+1900,$mon+1,$mday,$hour,$min,$sec;
+}
+
+sub num_format {
+  my $x = shift;
+  my @a;
+  my $i = 3;
+  while ($i < length($x)) {
+    push @a, substr($x, -$i, 3);
+    $i += 3;
+  }
+  push @a, substr ($x, 0, 3 + length($x) - $i);
+
+  return join '_', reverse @a;
+}
+
+sub file_type_format {
+  my $tp = shift;
+  my %type_sym = (8  => 'file',
+                  4  => 'dir',
+                  10 => 'link',
+                  12 => 'sock',
+                  1  => 'pipe',
+                  2  => 'char',
+                  6  => 'block');
+
+  return $type_sym {$tp};
+}
+
+sub perm_format {
+  my $perm = shift;
+  return sprintf "%04o", $perm;
+}
+
+sub owner_format {
+  my ($uid, $gid) = @_;
+  my $uname = getpwuid($uid);
+  my $gname = getgrgid($gid);
+  return ($uname? $uname : $uid) . ':' . ($gname ? $gname : $gid);
+}
+
+sub rdev_format {
+ return sprintf "%03d,%03d,%03d",
+                 ($_[0] >> 16) & 0xff,
+                 ($_[0] >> 8) & 0xff,
+                  $_[0] & 0xff;
+}
+## localization #############################################################
+sub text {
+  my $key = shift;
+  $lang eq 'en' and return $key;
+  #print "lang:$lang, key:$key->", $local_text {$key}->{$lang}, "\n";
+  exists $local_text {$key}->{$lang} ? return $local_text {$key}->{$lang} : return $key;
+}
+
+sub get_lang {
+  my ($x, $codepage) = split /\./, $ENV{LANG};
+  my ($language, $country) = split /_/, $x;
+
+  if ($codepage =~ /utf-?8/i) {
+    return lc ($language);
+  }
+  else {
+    return 'en';
+  }
+}
+
+## Clipboard ################################################################
+sub clipboard_copy {
+  my $letter = shift;
+  my $path;
+  my $name = Result_List::selected_name;
+  $path = $dir_box_a->get .'/' . $name if $letter eq 'a';
+  $path = $dir_box_b->get .'/' . $name if $letter eq 'b';
+
+  my $target_text = {
+      target => 'UTF8_STRING', # some string representing the drag type
+      flags => [], # Gtk2::TargetFlags
+      info => 1,  # some app-defined integer identifier
+  };
+
+  my $target_copy_file = {
+      target => 'x-special/gnome-copied-files',
+      flags => [], # Gtk2::TargetFlags
+      info => 2,  # some app-defined integer identifier
+  };
+
+  my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
+  $clipboard->set_with_data (get_func, clear_func, $path,
+                             ($target_text, $target_copy_file));
+  $clipboard->store();
+
+  # "PRIMARY" - X selection
+  $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('PRIMARY', TRUE));
+  $clipboard->set_text ($path);
+}
+
+
+sub get_func {
+  my ($clipboard, $selectiondata, $info, $path) = @_;
+
+  if ($info == 1) {
+    $selectiondata->set ($selectiondata->target(), 8, $path);
+  }
+  if ($info == 2) {
+    $selectiondata->set ($selectiondata->target(), 8,
+                         "copy\nfile://$path");
+  }
+  if ($info == 3) {
+    $selectiondata->set ($selectiondata->target(), 8,
+                         "cut\nfile://$path");
+    Result_List::delete_item (Result_List::selected_inx_0);
+  }
+}
+
+sub clear_func {
+  my ($self, $path) = @_;
+}
+
+
+#---------------------------------------------------------------------------
+# обработка  строки директории
+
+# удаление пробелов и замена специальных символов (имена директорий)
+sub rm_sp {
+  my $str = shift;
+  $str =~ s/^\s+//g;
+  $str =~ s/\s+$//g;
+  return $str;
+}
+
+# замена ~/ домашним каталогом
+sub home {
+  my $str = shift;
+  if ($str =~ /^~\//) {
+    $str =~ s/^~/$ENV{HOME}/e;
+  }
+  return $str;
+}
+
+# замена ./ текущим  каталогом
+sub pwd {
+  my $str = shift;
+  if ($str =~ /^\.\//) {
+    $str =~ s/^\./$ENV{PWD}/e;
+  }
+  return $str;
+}
+
+# замена переменной окружения $XXX её значением
+sub envar {
+  my $str = shift;
+  if ($str =~ /^\$.+\//) {
+    my $var = $&;
+    $var =~ s/\/$//;
+    $var =~ s/^\$//;
+    $str =~ s/^\$.+\//$ENV{$var}/e;
+  }
+  return $str;
+}
+
+BEGIN {
+  $icon_data =<<END_ICON;
+iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBI
+WXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH3gQZCiMlxEtP2gAAAB1pVFh0Q29tbWVudAAAAAAAQ3Jl
+YXRlZCB3aXRoIEdJTVBkLmUHAAACbElEQVRYw+2XX0sUYRTGf+ed2W3XVnMjw9QMUjElW4suQoyu
+oosyCMqLwG8Q3fYh+gB+gIgMCqL1A2RG17uaZVGoaatZ/mnVddf583ZhWiquNbNbQh4YGIY5533e
+5znPmXdgL/73kLWbjhgXVizu2A5n0JhrzzUQNEGpgqyXEWFAKe7Gk/StA+iI0SkiDy+2NXGpvZlQ
+MLCeYRqKx/2fSM1mf6L1GJZtMTM9yZfPk4C+EU/ySK7GqMpZvL9183y4pbEax3E3UiTwemyBF69m
+CkO5COlvc4x+eJdRijplO7TUVJaGz548tmVxAK2hoTpCNBLA1auS+AmtNeXRQ4TCoRKtOWW6mvq6
+o4exbGfbJNMQrrVXMTqVYXh8gUzO8SWHUoqD0XJSqakGE1CGsXM5Qwn11fs5URtBfHZDIGBwb3mS
+8QmU+Wf0gWVr/AqhEdwfJdS/ngN5GdCu/92CIEq8AbDuJ3FefgTlUXMXVFMF+26f88jA4gp6LutP
+73T+/Pw94Gr/Iu9QIy8DxukjSCS4Og69TR2kqtQ7ALOtFtpqi+qC3W1D+9kIzvBXPA8+DaqmjMCV
+Rm8AnKFpnP4xfy5orsgLIL8ESgogsniXQCJBJBr23ika5EDoNwBsY9VgVyt0tfomQWuNbLbyLx+j
++fRidusLhTx4bqotIqSXsgjMK9MgkXg74WSWc3/NepnsCok3E65hkFC9AwwqYai75zmGoVAiSJEu
+pQTDUHQ/6EMphnoHGFw7FZu2w5PSksDlxuOVBANmUXaey1kMj0yxtGw/NQ2ux5NYG8TpiFEJdAJl
+RWJ/FuiJJ5nd+yXbNfEddB3KioUXs90AAAAASUVORK5CYII=
+END_ICON
+
+  %local_text = ('name'                  => {ru => 'имя'},
+		 'diff'                  => {ru => 'отлич'},
+		 'perm A'                => {ru => 'права A'},
+                 'perm B'                => {ru => 'права B'},
+		 'own A'                 => {ru => 'влад A'},
+		 'own B'                 => {ru => 'влад B'},
+		 'type A'                => {ru => 'тип A'},
+		 'type B'                => {ru => 'тип B'},
+		 'time A'                => {ru => 'время A'},
+		 'time B'                => {ru => 'время B'},
+                 'size A'                => {ru => 'размер A'},
+                 'size B'                => {ru => 'размер B'},
+                 'Compare'               => {ru => 'Сравнить каталоги'},
+		 'comp size'             => {ru => 'учесть размер'},
+                 'comp time'             => {ru => 'учесть время'},
+                 'comp content'          => {ru => 'сравнивать содержимое'},
+                 'Open A'                => {ru => 'Открыть A'},
+		 'Open B'                => {ru => 'Открыть B'},
+		 'Copy A to clipboard'   => {ru => 'Копировать A в буфер'},
+                 'Copy B to clipboard'   => {ru => 'Копировать B в буфер'},
+                 'diff A and B'          => {ru => 'diff A и B'},
+		 'comp A and B content ' => {ru => 'Сравнить содержимое A и B'},
+                 'Execute operations'    => {ru => 'Выполнить операции'},
+                 'Exit'                  => {ru => 'Выход'},
+                 'Execute all operation?'=> {ru => 'Выполнить все операции?'},
+                 'Operation ignored'     => {ru => 'Игнорированы операции'},
+                 'Content is equevalent' => {ru => 'Содержимое файлов совпадает'},
+		 'Content is different'  => {ru => 'Содержимое файлов отличается'},
+		 'copy error'            => {ru => 'Ошибки копирования'},
+		 'move error'            => {ru => 'Ошибки перемещения'},
+                 'delete error'          => {ru => 'Ошибки удаления'},
+		);
+
+  $lang = get_lang();
+}

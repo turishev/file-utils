@@ -1,0 +1,651 @@
+#!/usr/bin/perl -w
+######################################################################
+# Copyright (c) 2014 Turishev Evgeniy <ew_turi@mail.ru>
+# This file is licensed under the GNU General Public License version 3
+# or any later version.
+#######################################################################
+
+use Encode;
+use Glib qw/TRUE FALSE/;
+use utf8;
+#use open ':utf8';
+use Gtk2 '-init';
+use Gtk2::SimpleList;
+use File::Find;
+use File::Basename;
+use File::Path;
+use Getopt::Std;
+use MIME::Base64 qw(decode_base64);
+use Carp;
+use strict;
+
+my $file_manager="thunar";
+my $open_helper='exo-open';
+my $main_title = 'dir-size';
+
+############################################################################
+my $base_dir;
+
+my $list;
+
+my $icon_data;
+my $main_window;
+
+my $sum_size = 0;
+my $break_search;
+my $current_dir_size;
+my $dir_label;
+my $stat_label;
+my $sum_label;
+my $info_label;
+my $sel_label;
+my $calc_dir = 0;
+
+Getopt::Std::getopts('d:');
+
+if ($Getopt::Std::opt_d) {
+  $base_dir = decode ('utf8', $Getopt::Std::opt_d);
+  $calc_dir = 1;
+}
+else {
+  $base_dir = decode ('utf8', $ENV{PWD});
+}
+create_window();
+Gtk2->main;
+
+0;
+############################################################################
+sub create_window {
+  my $icon_pixbuf;
+
+  eval {
+    my $raw_data = decode_base64 ($icon_data);
+    my $pixbufloader = Gtk2::Gdk::PixbufLoader->new;
+    $pixbufloader->write ($raw_data);
+    $pixbufloader->close;
+    $icon_pixbuf = $pixbufloader->get_pixbuf;
+  };
+  if ($@) {
+    print STDERR "error create icon\n";
+  }
+
+  $main_window = Gtk2::Window->new ('toplevel');
+  $main_window->signal_connect (destroy => sub { Gtk2->main_quit; });
+  $main_window->set_border_width (5);
+  my $box = Gtk2::VBox->new ();
+  $box->set_size_request (400, 200);
+
+  my $hbox = Gtk2::HBox->new ();
+
+  my $button = Gtk2::Button->new (" dir: ");
+
+  $button->signal_connect (clicked => \&dir_dialog_run,  $main_window);
+
+  $hbox->pack_start ($button, FALSE, FALSE, 0);
+
+  $dir_label = Gtk2::Label->new ($base_dir);
+  #$dir_label->set_line_wrap_mode ('char');
+  $dir_label->set_line_wrap (TRUE);
+
+  $hbox->pack_start ($dir_label, FALSE, FALSE, 0);
+  $box->pack_start ($hbox, FALSE, FALSE, 0);
+
+  my $menu = Menu::create ('dir-size', \&dirsize_handler,
+			   'Open',     \&open_handler,
+			   'Delete',   \&delete_handler,
+			   'Copy',     \&clipboard_copy,
+			   'Cut',      \&clipboard_cut,
+			   );
+
+  $list = Gtk2::SimpleList->new ('size' => 'text',
+				 'name' => 'text');
+  $list->get_selection->set_mode ('multiple');
+
+  my $clm = $list->get_column (0);
+  ($clm->get_cell_renderers())[0]->set ('xalign', 1);
+  $clm->set_sort_column_id (0);
+
+  $clm = $list->get_column (1);
+  $clm->set_sort_column_id (1);
+  ($clm->get_cell_renderers())[0]->set ('xalign', 0);
+
+  $list->get_model->set_sort_func (0, sub {my ($list, @iter) = @_;
+					   @iter = map {$_ = $list->get($_, 0);
+							$_=~s/_//g; $_} @iter;
+					   return ($iter[0] <=> $iter[1]);});# sort size
+  $list->get_model->set_sort_column_id (0,'descending');
+
+  $list->signal_connect('button-press-event' => \&list_click_handler);
+  $list->get_selection()->signal_connect('changed' => \&show_selected);
+
+  my $scroll = Gtk2::ScrolledWindow->new;
+  $scroll->set_policy ('automatic', 'automatic');
+  $scroll->add ($list);
+
+  my $eventbox = Gtk2::EventBox->new();
+
+  $eventbox->signal_connect('button-release-event' => sub {
+			      my ($widget,$event) = @_;
+			      my $button_nr = $event->button;
+			      (selected_inx() > -1)
+				&& ($button_nr == 3)
+				  &&($menu->popup(undef,undef,undef,undef,0,0));
+			    });
+
+  $eventbox->add ($scroll);
+
+  $box->pack_start($eventbox, TRUE, TRUE, 0);
+
+  my $sep = Gtk2::HSeparator->new();
+  $box->pack_start($sep, FALSE, TRUE, 0);
+
+  $hbox = Gtk2::HBox->new();
+  $sum_label = Gtk2::Label->new ();
+
+  #$sum_label->set_alignment (0,0.5);
+  $hbox->pack_start ($sum_label, FALSE, FALSE, 0);
+  $stat_label = Gtk2::Label->new (" please start calculation");
+  #$sum_label->set_alignment (0,0.5);
+  $hbox->pack_start ($stat_label, FALSE, FALSE, 0);
+
+  $sel_label = Gtk2::Label->new ();
+  #$sum_label->set_alignment (0,0.5);
+  $hbox->pack_start ($sel_label, TRUE, TRUE, 0);
+
+  $info_label = Gtk2::Label->new ();
+  $hbox->pack_end ($info_label, FALSE, FALSE, 0);
+
+  $box->pack_start ($hbox, FALSE, FALSE, 0);
+
+  $hbox = Gtk2::HBox->new();
+
+  $button = Gtk2::Button->new ("Calculate dir");
+  $hbox->pack_start ($button, TRUE, TRUE, 0);
+  $button->signal_connect (clicked => sub {show_info ('');
+					   start_search()},
+			   $main_window);
+
+  $button = Gtk2::Button->new ("Stop");
+  $hbox->pack_start ($button, TRUE, TRUE, 0);
+  $button->signal_connect (clicked => \&on_stop_search,
+			   $main_window);
+
+  $button = Gtk2::Button->new ("Close");
+  $hbox->pack_start ($button, TRUE, TRUE, 0);
+  $button->signal_connect (clicked => sub {$break_search = 1;
+					   Gtk2->main_quit; return FALSE},
+			   $main_window);
+
+  $box->pack_start ($hbox, FALSE, FALSE, 0);
+  $main_window->add ($box);
+  $main_window->signal_connect (show => \&on_show_window, $main_window);
+  $main_window->show_all ();
+
+  # после $main_window->show_all !!
+  $main_window->set_icon ($icon_pixbuf);
+  $button->grab_focus;
+}
+
+sub file_parm {
+  my $name = shift;
+  my @par = lstat ($name);
+  @par  || return (undef, undef);
+  return (file_type_format ($par[2] >> 12), #type,
+	  $par[7]);     # size
+}
+
+sub check_file {
+  die if $break_search;
+  return if $_ eq '.' or $_ eq '..';
+
+  my $name = decode ('utf8', $_);
+  my $dir = decode ('utf8', $File::Find::dir);
+  my $path = $dir .'/'. $name;
+
+  my ($type, $size) = file_parm ($name);
+  if (defined $type) {
+    $current_dir_size += $size;
+  }
+  else {
+    carp "error get file params for:", encode ('utf8', $path), "\n";
+  }
+
+  while (Glib::MainContext->default->pending)
+    { Glib::MainContext->default->iteration(FALSE)};
+}
+
+sub search_in_dir {
+  my ($dir, $size) = @_;
+  my $d = encode ('utf8', $dir);
+  #$current_dir_size = $size;
+  $current_dir_size = 0;# как thunar и mc не читываю саму директорию- это удобнее когда они пусты
+  eval {
+    find ({wanted => \&check_file,
+	   follow => 0},
+	  $d);
+  };
+  if ($@) {# error
+    carp "error calculate '$d': $@\n";
+    $dir = '(error) '.$dir;
+    $current_dir_size = -1;
+  }
+  add_list ($dir, $current_dir_size, 'd');
+}
+
+sub start_search {
+  my $names = shift;
+
+  if (! $names) {
+    $names = file_list ($base_dir);
+  }
+
+  $sum_size = 0;
+  $current_dir_size = 0;
+  $break_search = 0;
+
+  $list->get_model->clear;
+
+  $main_window->set_title ("$main_title:$base_dir");
+  $dir_label->set_text ($base_dir);
+  $stat_label->set_text (' calculation..');
+  show_sum ();
+
+  chdir $base_dir;
+
+  for my $name (@$names) {
+    return if $break_search;
+
+    my ($type, $size) = file_parm ($name);
+
+    if (! defined $type) {
+      carp "error get file params for :", encode ('utf8', $name), "\n";
+      next;
+    }
+    if ($type eq 'f') {
+      add_list ($name, $size, $type);
+    }
+    elsif ($type eq 'd') {
+      search_in_dir ($name, $size);
+    }
+  }
+  show_sum ();
+  $stat_label->set_text (' bites total');
+}
+
+sub on_show_window {
+  if ($calc_dir) {
+    start_search ();
+  }
+  else {
+    for my $a (@ARGV) {
+      if ($a =~ /\//) {
+	show_msg ('error', 'Command line arguments must contain only file names in current directory!');
+	return;
+      }
+      $a = decode ('utf8', $a);
+    }
+    if (@ARGV) {
+      show_info ('*');
+      start_search (\@ARGV);
+    }
+  }
+  return FALSE;
+}
+
+sub on_stop_search {
+   $break_search = 1;
+   $stat_label->set_text ('aborted');
+}
+
+sub dir_dialog_run {
+  my $self = shift;
+  my $res;
+  $break_search = 0; # остановить предыдущий поиск
+  my $dialog = Gtk2::FileChooserDialog->new
+    ('Select directory',
+     undef,
+     'select-folder',
+     'gtk-ok'     => 'ok',
+     'gtk-cancel' => 'cancel');
+
+  $dialog->set_current_folder ($base_dir);
+
+  my $filter = Gtk2::FileFilter->new;
+  $filter->add_mime_type ('inode/directory');
+  $dialog->set_filter ($filter);
+  my $response = $dialog->run;
+  $res = $response eq 'ok' ? $dialog->get_filename : '';
+  $dialog->destroy;
+
+  if ($res) {
+    $base_dir = $res;
+    show_info ('');
+    start_search ();
+  }
+}
+
+sub add_list {
+  my ($name, $size, $type)  = @_;
+  $name = fileparse ($name);
+  $name .= '/' if $type eq 'd';
+  $sum_size += $size;
+  show_sum();
+
+  push @{$list->{data}}, [num_format($size), $name];
+}
+
+sub del_list {
+  my $inx  = shift;
+  my $size = $list->{data}[$inx]->[0];
+  $size =~ s/_//g;
+  splice $list->{data}, $inx, 1;
+  $sum_size -= $size;
+  $sum_size = 0 if $sum_size < 0;
+  show_sum ();
+}
+
+sub find_inx {
+  my $name = shift;
+  for my $i ($list->{data}) {
+    if ($list->{data}[$i]->[1] eq $name) {
+      return $i;
+    }
+  }
+}
+
+sub num_format {
+  my $x = shift;
+  my @a;
+  my $i = 3;
+  while ($i < length ($x)) {
+    push @a, substr ($x, -$i, 3);
+    $i += 3;
+  }
+  push @a, substr ($x, 0, 3 + length($x) - $i);
+  return join '_', reverse @a;
+}
+
+sub file_type_format {
+  my $tp = shift;
+  my %type_sym = (8  => 'f',
+		  4  => 'd',
+		  10 => 'l',
+		  12 => 's',
+		  1  => 'p',
+		  2  => 'c',
+		  6  => 'b');
+
+  return (defined ($type_sym {$tp}) ? $type_sym {$tp} : '');
+}
+
+sub show_msg {
+  my ($type, $text) = @_;
+  my $butt = 'ok';
+
+  if ($type eq 'question') {
+    $butt = 'yes-no';
+  }
+  my $dialog = Gtk2::MessageDialog->new ($main_window,
+                                         'destroy-with-parent',
+                                         $type, # message type
+                                         $butt, # which set of buttons?
+                                         $text);
+
+  if ($dialog->run eq 'yes') {
+    $dialog->destroy;
+    return 1;
+  }
+  else {
+    $dialog->destroy;
+    return 0;
+  }
+}
+
+##############################################################################
+sub name_str {
+  my $namestr = "";
+  for my $nm (@_) {
+    $namestr .= " '$nm'";
+  }
+  return $namestr;
+}
+
+sub selected_inx {
+  my @sel = $list->get_selected_indices;
+  return $sel[0];
+}
+
+sub selected_names {
+  my @sel = $list->get_selected_indices();
+  my @names;
+  for my $inx (@sel) {
+    push (@names, @{$list->{data}}[$inx]->[1]);
+  }
+  return @names;
+}
+
+sub selected_name {
+  my @sel = $list->get_selected_indices();
+  return @{$list->{data}}[$sel[0]]->[1];
+}
+
+sub delete_item {
+  my $inx = shift;
+   splice @{$list->{data}}, $inx, 1;
+}
+
+sub file_list {
+  my $path = shift;
+
+  if (! opendir DIR, encode ('utf8', $path)) {
+    carp "error opendir" . encode ('utf8', $path) ."\n";
+    return;
+  }
+  my @names;
+
+  while (readdir DIR) {
+    push @names, decode ('utf8', $_) if $_ !~ /^\.+$/;
+  }
+  closedir DIR;
+  return \@names;
+}
+
+sub show_sum {
+  $sum_label->set_markup ("<span weight=\"bold\" foreground=\"blue\">"
+			  . num_format ($sum_size) . "</span>");
+}
+
+sub show_info {
+  my $text = shift;
+  if ($text) {
+    $info_label->set_markup ("<span weight=\"normal\" foreground=\"green\">("
+			     . $text . ")</span>");
+  }
+  else {
+    $info_label->set_text('');
+  }
+}
+
+sub show_selected {
+  my $sum;
+  my @sel =  $list->get_selected_indices;
+  map {my $x = $list->{data}[$_]->[0]; $x =~ s/_//g; $sum += $x} @sel;
+  $sel_label->set_text ($sum ? '[ ' . num_format ($sum) . ' ]' : '');
+}
+
+sub file_path_utf8 {
+  my $name = shift;
+  my $bd = $base_dir;
+  $bd =~  s#/$##;
+  my $path = encode ('utf-8',  $bd . '/'.$name);
+}
+
+####################################################################
+sub open_handler {
+  my $name = selected_name();
+  my $pid;
+  if (not $pid = fork()) {
+    exec ($open_helper, $name);
+  }
+}
+
+sub dirsize_handler {
+  my $name = selected_name ();
+
+  if (not $name =~ s#/$##) {
+    return;  # only dirs!
+  }
+
+
+  my $pid;
+  if (not $pid = fork()) {
+    exec ('/home/prog/myproj/xfce-add/dir-size', '-d', file_path_utf8 ($name));
+  }
+}
+
+sub delete_handler {
+  my $inx = selected_inx();
+  my $name = $list->{data}[$inx]->[1];
+
+  my $yes = show_msg ('question', "Delete file (directory)?\n'$name'");
+  my $err;
+  if ($yes) {
+    my $err;
+    File::Path::remove_tree ($name , {error => \$err} );
+
+    if (@$err) { #ошибка
+      show_msg ('error', "Delete file error\n'$name'");
+    }
+    else {
+     del_list ($inx);
+    }
+  }
+}
+
+# обработка мыши
+sub list_click_handler {
+  my ($widget,$event) = @_;
+  my $button_nr = $event->button;
+  # клик правой кнопкой - показать меню
+  if ($button_nr == 3) {
+    my @sel = selected_inx();
+    return TRUE if $#sel > 0;
+  }
+  #двойной клик кнопкой 1 - открываем
+  if ($button_nr == 1 and  $event->type() eq '2button-press') { # 
+    open_handler ();
+  }
+  # if ($button_nr == 1 and  $event->type() eq 'button-press') { # 
+  #   show_selected ();
+  # }
+  return FALSE;
+}
+#############################################################################
+# Clipboard
+sub clipboard_copy {
+  my $names = [file_path_utf8 (selected_name ())];
+  #print "copy:@$names\n";
+  my $target_text = {
+      target => 'UTF8_STRING', # some string representing the drag type
+      flags => [], # Gtk2::TargetFlags
+      info => 1,  # some app-defined integer identifier
+  };
+
+  my $target_copy_file = {
+      target => 'x-special/gnome-copied-files',
+      flags => [], # Gtk2::TargetFlags
+      info => 2,  # some app-defined integer identifier
+  };
+
+  # CLIPBOARD - gtk2+
+  my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
+  $clipboard->set_with_data (\&get_func, \&clear_func, $names,
+                             ($target_text, $target_copy_file));
+  $clipboard->store ();
+
+  #"PRIMARY" - X selection
+  $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('PRIMARY', TRUE));
+  $clipboard->set_text (join "\n", @$names);
+}
+
+sub clipboard_cut {
+  my $names = [file_path_utf8 (selected_name ())];
+  my $target_copy_file = {
+      target => 'x-special/gnome-copied-files',
+      flags => [], # Gtk2::TargetFlags
+      info => 3,  # some app-defined integer identifier
+  };
+
+  my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
+  $clipboard->set_with_data (\&get_func, \&clear_func, $names,
+                             ($target_copy_file));
+  $clipboard->store();
+}
+
+sub get_func {
+  my ($clipboard, $selectiondata, $info, $names) = @_;
+  my $namestr = "file://" . join ("\nfile://",  @$names);
+
+  if ($info == 1) {
+    $selectiondata->set ($selectiondata->target(), 8, $namestr);
+  }
+  if ($info == 2) {
+    $selectiondata->set ($selectiondata->target(), 8,
+                         "copy\n" . $namestr);
+  }
+  if ($info == 3) {
+    $selectiondata->set ($selectiondata->target(), 8,
+                         "cut\n" . $namestr);
+    $list->delete_names (@$names);
+  }
+}
+
+sub clear_func {
+  my ($self, $path) = @_;
+}
+
+##############################################################################
+package Menu;
+use utf8;
+#use Data::Dumper;
+
+sub create {
+  my $menu = Gtk2::Menu->new;
+
+  $menu->append(Gtk2::TearoffMenuItem->new);
+  my ($item, $name, $handler);
+  while ($name = shift) {
+    $handler = shift;
+    if ($name =~ /^-+$/) {
+      $item = Gtk2::SeparatorMenuItem->new();
+    }
+    else {
+      $item = Gtk2::MenuItem->new_with_label ($name);
+      $item->signal_connect ('activate' => $handler);
+    }
+    $menu->append ($item);
+  }
+  $menu->show_all;
+  return $menu;
+}
+# END Menu ###########################################################
+
+package main;
+BEGIN {
+  $icon_data =<<END_ICON;
+iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBI
+WXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH3gQZCiQLV9zU0gAAAB1pVFh0Q29tbWVudAAAAAAAQ3Jl
+YXRlZCB3aXRoIEdJTVBkLmUHAAACcElEQVRYw+2XTU8TURSGn3PnDlI+DBhjCKAGgaBGbDRuNGhX
+xoViYqIs3Ll374Z/4A/gB7gQE02IhR+Amri0BRE0EDGU8hUqtlBaOjPXBV8pRUQKRZST3GQycz7e
+ed9z556BQ/vfTVYvWv0EljI8cVwuY9Cr9w1QpEGpXamXFKFPKZ4Gw/SuAWj10yYiL25eO8etlvMU
+F9lrEdpSvHo7TjSWWke7Q8s4GWanJ5iZmgDMg2CYl3LXT3U6w/Djh9d9zU01uK6XTZHAp28J3n2c
+3R3KRYj/+M7oyJekUtQrx6W5tqrcd+XC6ZziAMZAY00ZlWU2nlmWJB8zxlBReZxiX3GJMVzUnqGh
+/uQJMo6Lr3+Kiq5BjF4XXNIOE+0B7rVUMzqZZGgsQTLt5iWHUopjlRVEo5ONGlCWtZzOiiXxDUzn
+0uaBpYWGmlLOnipD8uwG27Z4tjjBWASlcwTfkj7IOIZ8hTAI3koKtd/fgX0HoLfjNOOlcD2VxXyJ
+aMqVXRgAgXgPqQ2ej4400l56qTAS2CbXzRb1b/TAwQWgRAq3CzY7xEfGE/RMRXDFZIG6c7W2MACG
+owm63kcwymQNF38KYMcSiMqVQGt1UJvQ7ENls94Dc/H5FCKyfNz9YnCUDbGSO7vgedt7ExEhvpBC
+YE5ri1Doc8RNLqatpUAd84G6nIAPm2W5sbI2mXjkN1s0mVoiNBjxLIuQ6u6jXwkDHZ1vsCyFEkHy
+WEqpLZ4JlqXoeN6LUgx099G/OhVrx6WrvMS+3XSmiiJb74ns6XSGoa+TLCw6r7XF/WCYTBZXrX6q
+gDbg6B61XgzoDIaJHf6S/TX2E+VC0Xp3ae8/AAAAAElFTkSuQmCC
+END_ICON
+}
