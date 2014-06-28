@@ -338,18 +338,33 @@ sub dialog_run {
   return $res;
 }
 
+sub sftp_ls {
+  my ($sftp, $dir) = @_;
+  my $ls = $sftp->ls ($dir , wanted => sub {my $n=$_[1];
+						 $n->{filename} !~ /^\.{1,2}$/ and
+						   S_ISDIR ($n->{a}->perm ());
+					       }
+		     );
+  #print "$_->{filename}, attrs:",  $_->{a}->{size}, ",dir:", S_ISDIR ($_->{a}->{perm}), "\n" for (@$ls);
+  my @dirs = sort map {$_->{filename}} @$ls ;
+  return \@dirs;
+}
+
 sub sftp_expand_dir {
-  my ($view, $iter, $path) = @_;
+  my ($view, $iter, $path, $sftp) = @_;
   #Gtk2::TreeView, Gtk2::TreeIter, Gtk2::TreePath
   my $model = $view->get_model;
   my @inx = $path->get_indices ();
   print "inx:@inx\n";
 
   $child_num = $model->iter_n_children ($iter);
+
   if ($child_num <= 1) {
     # yet not expanded throw sftp
+
     my $dir_path;
     my $it = $iter;
+
     while ($it) {
       my $name = $model->get_value ($it);
       print "name:",$name,"\n";
@@ -357,18 +372,33 @@ sub sftp_expand_dir {
       $it = $model->iter_parent ($it);
     }
 
+    $dir_path = '/' . $dir_path;
+
     print "dir_path:$dir_path\n";
 
     my $iter_child = $model->append ($iter);
 
-    $model->set ($iter_child, 0 => "zzz");
-    my $iter_child = $model->append ($iter_child);
-    $model->set ($iter_child, 0 => ".");
+    my $names = sftp_ls ($sftp, $dir_path);
+
+    # remove fictive '.' children
+    # if (@$names) {
+    #   my $it = $model->remove ($model->iter_children ($iter));
+    # }
+
+    for my $n (@$names) {
+      print "add:$n\n";
+      my $it = $model->append ($iter);
+      $model->set ($it, 0 => $n);
+      # add fictive '.' children - need for expand dir work
+#      my $iter_child = $model->append ($it);
+#      $model->set ($iter_child, 0 => ".");
+    }
   }
 }
 
 sub sftp_browser_create {
-  my @names = @_;
+  my $sftp = shift;
+
   my $vbox = Gtk2::VBox->new(FALSE,5);
   my $sw = Gtk2::ScrolledWindow->new (undef, undef);
   $sw->set_shadow_type ('etched-out');
@@ -376,19 +406,24 @@ sub sftp_browser_create {
   $sw->set_size_request (300, 300);
   $sw->set_border_width (5);
 
-  my $tree_store = Gtk2::TreeStore->new (qw/Glib::String/);
+  my $model = Gtk2::TreeStore->new (qw/Glib::String/);
 
-  for my $n (sort @names) {
-    my $iter = $tree_store->append (undef);
-    $tree_store->set ($iter, 0 => $n);
-    my $iter_child = $tree_store->append ($iter);
-    $tree_store->set ($iter_child, 0 => ".");
+  my $names = sftp_ls ($sftp, '/');
+
+  for my $n (@$names) {
+    my $iter = $model->append (undef);
+    $model->set ($iter, 0 => $n);
+    # my $iter_child = $model->append ($iter);
+    # $model->set ($iter_child, 0 => ".");
   }
 
-  my $tree_view = Gtk2::TreeView->new ($tree_store);
-  $tree_view->signal_connect ('row-expanded'=>\&sftp_expand_dir);
-  #$tree_view->set ('show-expanders', FALSE);
+  my $tree_view = Gtk2::TreeView->new ($model);
+  $tree_view->signal_connect ('row-expanded'=>\&sftp_expand_dir, $sftp);
+  $tree_view->set ('show-expanders', FALSE);
+
   my $tree_column = Gtk2::TreeViewColumn->new();
+  #$tree_column->set_expand(TRUE);
+
   $tree_column->set_title ("Click to sort");
   my $renderer = Gtk2::CellRendererText->new;
   $tree_column->pack_start ($renderer, FALSE);
@@ -400,6 +435,8 @@ sub sftp_browser_create {
   # which is a text renderer
   $tree_column->add_attribute ($renderer, text => 0);
   $tree_view->append_column ($tree_column);
+  # $tree_view->set_expander_column ($tree_column);
+
   $tree_view->set_search_column (0);
   $tree_column->set_sort_column_id (0);
   $tree_view->set_reorderable(TRUE);
@@ -415,32 +452,23 @@ sub sftp_run {
   require Net::SFTP::Foreign::Attributes;
   use Fcntl qw (S_ISDIR :mode);
 
-  $self->{sftp_host} = 'localhost';
-  $self->{sftp_port} = '';
-  $self->{sftp_dir}  = '/';
+  my $sftp_host = 'localhost';
+  my $sftp_dir  = '/';
 
-  my $sftp = Net::SFTP::Foreign->new (host=> , $self->{sftp_host},
+  my $sftp = Net::SFTP::Foreign->new (host=> , $sftp_host,
 				      user=> 'prog',
 				      password => 'sss');
 
-  $sftp->die_on_error("unable to connect to remote host");
-  # include/stat.h macros S_ISDIR  - only dir, not s-links
-  my $ls = $sftp->ls ($self->{sftp_dir}, wanted => sub {my $n=$_[1];
-							$n->{filename} !~ /^\.{1,2}$/ and
-							  S_ISDIR ($n->{a}->perm ());
-						      }
-		     );
+  $self->{sftp} = $sftp;
 
-  #print "$_->{filename}, attrs:",  $_->{a}->{size}, ",dir:", S_ISDIR ($_->{a}->{perm}), "\n" for (@$ls);
-
-  my @dirs = map {$_->{filename}} @$ls ;
+  $sftp->die_on_error ("unable to connect to remote host");
 
   my $dialog = Gtk2::Dialog->new (::text ("Select remote dir"),
 				  $main_window,
 				  ['modal', 'destroy-with-parent'],
 				  'gtk-cancel' => 'cancel',
 				  'gtk-ok'     => 'ok');
-  my $tree = sftp_browser_create (@dirs);
+  my $tree = sftp_browser_create ($sftp);
 
   $dialog->vbox->add ($tree);
 
