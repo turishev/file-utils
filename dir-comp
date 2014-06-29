@@ -300,15 +300,11 @@ sub new {
                          }
                         );
 
-
-
-
   $self->{entry} = $entry;
-  $self->{box} = $hbox;
-  $self->{label}=$lab;
-  $self->{sftp_host}='';
-  $self->{sftp_port}='';
-  $self->{sftp_dir}='';
+  $self->{box}   = $hbox;
+  $self->{label} = $lab;
+  $self->{sftp}  = undef;
+
   return  $self;
 }
 
@@ -340,12 +336,11 @@ sub dialog_run {
 
 sub sftp_ls {
   my ($sftp, $dir) = @_;
-  my $ls = $sftp->ls ($dir , wanted => sub {my $n=$_[1];
-						 $n->{filename} !~ /^\.{1,2}$/ and
-						   S_ISDIR ($n->{a}->perm ());
-					       }
-		     );
-  #print "$_->{filename}, attrs:",  $_->{a}->{size}, ",dir:", S_ISDIR ($_->{a}->{perm}), "\n" for (@$ls);
+  my $ls = $sftp->ls ($dir ,
+		      wanted => sub {my $n=$_[1];
+				     $n->{filename} !~ /^\.{1,2}$/
+				       and S_ISDIR ($n->{a}->perm ());
+				   });
   my @dirs = sort map {$_->{filename}} @$ls ;
   return \@dirs;
 }
@@ -354,12 +349,15 @@ sub sftp_expand_dir {
   my ($view, $iter, $path, $sftp) = @_;
   #Gtk2::TreeView, Gtk2::TreeIter, Gtk2::TreePath
   my $model = $view->get_model;
-  my @inx = $path->get_indices ();
-  print "inx:@inx\n";
+#  my @inx = $path->get_indices ();
+#  print "inx:@inx\n";
 
-  $child_num = $model->iter_n_children ($iter);
+  # $child_num = $model->iter_n_children ($iter);
 
-  if ($child_num <= 1) {
+  my $first_child = $model->iter_children ($iter);
+  my $first_val = $model->get_value ($first_child);
+
+  if (! $first_val) {
     # yet not expanded throw sftp
 
     my $dir_path;
@@ -367,33 +365,30 @@ sub sftp_expand_dir {
 
     while ($it) {
       my $name = $model->get_value ($it);
-      print "name:",$name,"\n";
       $dir_path = $name . '/' . $dir_path;
       $it = $model->iter_parent ($it);
     }
 
     $dir_path = '/' . $dir_path;
-
-    print "dir_path:$dir_path\n";
-
-    my $iter_child = $model->append ($iter);
+    #print "dir_path:$dir_path\n";
 
     my $names = sftp_ls ($sftp, $dir_path);
 
-    # remove fictive '.' children
-    # if (@$names) {
-    #   my $it = $model->remove ($model->iter_children ($iter));
-    # }
+    # remove fictive ''-child
+    if (@$names) {
+      $model->remove ($first_child);
+    }
 
     for my $n (@$names) {
-      print "add:$n\n";
+      #print "add:$n\n";
       my $it = $model->append ($iter);
       $model->set ($it, 0 => $n);
-      # add fictive '.' children - need for expand dir work
-#      my $iter_child = $model->append ($it);
-#      $model->set ($iter_child, 0 => ".");
+      # add fictive '' children - need for expand dir work
+      my $iter_child = $model->append ($it);
+      $model->set ($iter_child, 0 => '');
     }
   }
+  return FALSE; # need expand
 }
 
 sub sftp_browser_create {
@@ -413,13 +408,14 @@ sub sftp_browser_create {
   for my $n (@$names) {
     my $iter = $model->append (undef);
     $model->set ($iter, 0 => $n);
-    # my $iter_child = $model->append ($iter);
-    # $model->set ($iter_child, 0 => ".");
+    my $iter_child = $model->append ($iter);
+    $model->set ($iter_child, 0 => '');
   }
 
   my $tree_view = Gtk2::TreeView->new ($model);
-  $tree_view->signal_connect ('row-expanded'=>\&sftp_expand_dir, $sftp);
-  $tree_view->set ('show-expanders', FALSE);
+  #$tree_view->signal_connect ('row-expanded'=>\&sftp_expand_dir, $sftp);
+  $tree_view->signal_connect ('test-expand-row'=>\&sftp_expand_dir, $sftp);
+  $tree_view->set ('show-expanders', TRUE);
 
   my $tree_column = Gtk2::TreeViewColumn->new();
   #$tree_column->set_expand(TRUE);
@@ -435,7 +431,7 @@ sub sftp_browser_create {
   # which is a text renderer
   $tree_column->add_attribute ($renderer, text => 0);
   $tree_view->append_column ($tree_column);
-  # $tree_view->set_expander_column ($tree_column);
+  $tree_view->set_expander_column ($tree_column);
 
   $tree_view->set_search_column (0);
   $tree_column->set_sort_column_id (0);
