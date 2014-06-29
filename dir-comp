@@ -437,6 +437,20 @@ sub sftp_browser_create {
   return ($sw, $tree_view);
 }
 
+sub sftp_connect {
+  my ($host, $port, $login, $pass) = @_;
+  my $sftp;
+  $sftp = Net::SFTP::Foreign->new (host =>  $host,
+				   user =>  $login,
+				   password => $pass);
+
+  if ($sftp->error) {
+    ::show_msg ('error', ::text ('SSH connect fail') .":\n" . $sftp->error);
+    return undef;
+  }
+  else {return $sftp}
+}
+
 sub sftp_run {
   my $self = shift;
 
@@ -487,18 +501,19 @@ sub sftp_run {
   $host_entr->set_text ('localhost');
   $login_entr->set_text ('prog');
   $pass_entr->set_text ('sss');
+  $port_entr->set_text ('22');
 
   my $tree;
   $connect_butt->signal_connect (clicked =>
 			 sub {
-			   my $sftp = Net::SFTP::Foreign->new (host=>  $host_entr->get_text,
-							       user=>  $login_entr->get_text,
-							       password => $pass_entr->get_text);
+                           $self->{sftp}  = sftp_connect ($host_entr->get_text,
+							  $port_entr->get_text,
+							  $login_entr->get_text,
+							  $pass_entr->get_text);
+                           return if not $self->{sftp};# error SSH Connect
 
-			   $self->{sftp} = $sftp;
-			   $sftp->die_on_error ("unable to connect to remote host");
                            my $tree_box;
-			   ($tree_box, $tree) = sftp_browser_create ($sftp);
+			   ($tree_box, $tree) = sftp_browser_create ($self->{sftp});
 			   $table->attach_defaults ($tree_box, 0, 5, 3, 4);
 			 });
 
@@ -509,27 +524,27 @@ sub sftp_run {
   my $response = $dialog->run;
 
   if ($response eq 'ok') {
-    print "OK\n";
     if (! $self->{sftp}) {
-      print "connect\n";
-      my $sftp = Net::SFTP::Foreign->new (host=>  $host_entr->get_text,
-					  user=>  $login_entr->get_text,
-					  password => $pass_entr->get_text);
-
-      $self->{sftp} = $sftp;
-
-      $sftp->die_on_error ("unable to connect to remote host");
+      $self->{sftp}  = sftp_connect ($host_entr->get_text,
+				     $port_entr->get_text,
+				     $login_entr->get_text,
+				     $pass_entr->get_text);
     }
-    $self->{protocol_label}->set_text ( $login_entr->get_text .'@'. $host_entr->get_text );
+    if ($self->{sftp}) {
+      $self->{protocol_label}->set_text ($login_entr->get_text
+					 .'@'. $host_entr->get_text);
 
-    if ($tree) {
-      my $sel_iter = $tree->get_selection()->get_selected();
-      my $dir = tree_path ($tree, $sel_iter);
-      $self->{entry}->set_text ($dir);
+      if ($tree) {
+	my $sel_iter = $tree->get_selection()->get_selected();
+	my $dir = tree_path ($tree, $sel_iter);
+	$self->{entry}->set_text ($dir);
+      }
     }
   }
   else {
-    $self->{sftp} = undef;
+    # ?? 
+    #$self->{sftp}->disconnect () if $self->{sftp};
+    #$self->{sftp} = undef;
   }
   $dialog->destroy;
 }
