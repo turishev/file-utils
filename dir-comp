@@ -282,9 +282,13 @@ sub new {
   my $entry = Gtk2::Entry->new;
   $hbox -> pack_end ($entry, TRUE, TRUE, 0);
 
-  my $butt = Gtk2::Button->new ($lab);
+  my $lb = Gtk2::Label->new ($lab);
+  $hbox->pack_start ($lb, FALSE, TRUE, 0);
+
+  my $butt = Gtk2::Button->new ('dir');
   $butt->set_size_request(50);
-  $hbox -> pack_start ($butt, FALSE, TRUE, 0);
+
+  $hbox->pack_start ($butt, FALSE, TRUE, 0);
   $butt->signal_connect (clicked => sub {
                            my $res = Dir_Box::file_dialog_run ($self, $lab);
                          }
