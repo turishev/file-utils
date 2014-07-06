@@ -7,7 +7,7 @@
 
 my $main_title  = 'dir-comp';
 my $open_helper = 'exo-open';
-my $editor      ='leafpad';
+my $editor      = 'leafpad';
 
 #######################################################################
 {
@@ -286,8 +286,7 @@ sub new {
   $butt->set_size_request(50);
   $hbox -> pack_start ($butt, FALSE, TRUE, 0);
   $butt->signal_connect (clicked => sub {
-                           my $res = Dir_Box::dialog_run ($lab);
-                           $entry->set_text ($res) if $res;
+                           my $res = Dir_Box::file_dialog_run ($self, $lab);
                          }
                         );
 
@@ -295,8 +294,7 @@ sub new {
   $butt->set_size_request(50);
   $hbox->pack_start ($butt, FALSE, TRUE, 0);
   $butt->signal_connect (clicked => sub {
-                           my $res = Dir_Box::sftp_run ($self);
-                           $entry->set_text ($res) if $res;
+                           Dir_Box::sftp_run ($self);
                          }
                         );
 
@@ -306,6 +304,10 @@ sub new {
   $self->{box}   = $hbox;
   $self->{label} = $lab;
   $self->{sftp}  = undef;
+  $self->{sftp_host} = '';
+  $self->{sftp_port} = '';
+  $self->{sftp_login} = '';
+  $self->{sftp_password} = '';
 
   return  $self;
 }
@@ -316,12 +318,12 @@ sub select_dir {
   $self->{entry}->set_text ($res) if $res;
 }
 
-sub dialog_run {
-  my $caption = shift;
-  my $res;
+sub file_dialog_run {
+  my $self = shift;
+  my $caption = $self->{lab};
 
   my $dialog = Gtk2::FileChooserDialog->new
-    ('Выбор ' . $caption,
+    (::text ('Select dir ') . $caption,
      undef,
      'select-folder',
      'gtk-ok'     => 'ok',
@@ -329,11 +331,14 @@ sub dialog_run {
 
   my $filter = Gtk2::FileFilter->new;
   $filter->add_mime_type ('inode/directory');
+
   $dialog->set_filter ($filter);
-  my $response = $dialog->run;
-  $res = $response eq 'ok' ? $dialog->get_filename : '';
+
+  if ( $dialog->run eq 'ok') {
+    $self->{entry}->set_text ($dialog->get_filename);
+    $self->sftp_disconnect();
+  }
   $dialog->destroy;
-  return $res;
 }
 
 sub tree_path {
@@ -440,8 +445,10 @@ sub sftp_browser_create {
 sub sftp_connect {
   my ($host, $port, $login, $pass) = @_;
   my $sftp;
-  $sftp = Net::SFTP::Foreign->new (host =>  $host,
-				   user =>  $login,
+
+  $sftp = Net::SFTP::Foreign->new (host     => $host,
+                                   port     => $port,
+				   user     => $login,
 				   password => $pass);
 
   if ($sftp->error) {
@@ -451,6 +458,16 @@ sub sftp_connect {
   else {return $sftp}
 }
 
+sub sftp_disconnect {
+  my $self = shift;
+
+  if ($self->{sftp}) {
+    $self->{sftp}->disconnect;
+    $self->{sftp} = undef;
+    $self->{protocol_label}->set_text ('');
+  }
+}
+
 sub sftp_run {
   my $self = shift;
 
@@ -458,16 +475,12 @@ sub sftp_run {
   require Net::SFTP::Foreign::Attributes;
   use Fcntl qw (S_ISDIR :mode);
 
-  my $sftp_host = 'localhost';
-  my $sftp_dir  = '/';
-
-
-
-  my $dialog = Gtk2::Dialog->new (::text ("Select remote dir"),
+  my $dialog = Gtk2::Dialog->new (::text ("Select remote dir") 
+				  . ($self->{sftp} ? ' - connected':''),
 				  $main_window,
 				  ['modal', 'destroy-with-parent'],
-				  'gtk-cancel' => 'cancel',
-				  'gtk-ok'     => 'ok');
+                                  'gtk-close' => 'close');
+
   my $table = Gtk2::Table->new (4, 3, FALSE);
   $dialog->vbox->add ($table);
 
@@ -493,58 +506,74 @@ sub sftp_run {
   $lb->set_alignment (1.0, 0.5);
   $table->attach ($lb, 2, 3, 1, 2, ['fill'],['expand', 'fill'], 5, 0);
   my $pass_entr = Gtk2::Entry->new();
+  $pass_entr->set ('invisible-char', 0x2a);
+  $pass_entr->set ('visibility', FALSE);
+
   $table->attach_defaults ($pass_entr, 3, 4, 1, 2);
 
-  my $connect_butt =  Gtk2::Button->new (::text ('Browse host'));
-  $table->attach_defaults ($connect_butt, 0, 4, 2, 3);
+  my $connect_butt =  Gtk2::Button->new (::text ('Connect to host'));
+  $table->attach_defaults ($connect_butt, 0, 2, 2, 3);
 
-  $host_entr->set_text ('localhost');
-  $login_entr->set_text ('prog');
-  $pass_entr->set_text ('sss');
-  $port_entr->set_text ('22');
+  my $browse_butt =  Gtk2::Button->new (::text ('Select dir'));
+  $table->attach_defaults ($browse_butt, 2, 4, 2, 3);
+
+  if ($self->{sftp}) {
+    $host_entr->set_text ($self->{sftp_host});
+    $port_entr->set_text ($self->{sftp_port});
+    $login_entr->set_text ($self->{sftp_login});
+    $pass_entr->set_text ($self->{sftp_password});
+  }
+  else {
+    $host_entr->set_text ('localhost');
+    $login_entr->set_text ('prog');
+ #   $pass_entr->set_text ('sss');
+    $port_entr->set_text ('22');
+  }
 
   my $tree;
+
   $connect_butt->signal_connect (clicked =>
-			 sub {
-                           $self->{sftp}  = sftp_connect ($host_entr->get_text,
-							  $port_entr->get_text,
-							  $login_entr->get_text,
-							  $pass_entr->get_text);
-                           return if not $self->{sftp};# error SSH Connect
+				 sub {
+                                   $self->{sftp}->sftp_disconnect() if $self->{sftp};
 
-                           my $tree_box;
-			   ($tree_box, $tree) = sftp_browser_create ($self->{sftp});
-			   $table->attach_defaults ($tree_box, 0, 5, 3, 4);
-			 });
+				   $self->{sftp}  = sftp_connect ($host_entr->get_text,
+								  $port_entr->get_text,
+								  $login_entr->get_text,
+								  $pass_entr->get_text);
+                                   $dialog->set_title (::text ("Select remote dir") 
+						       . ($self->{sftp} ? ' - connected':''));
+				 });
 
-  $dialog->set_default_response ('ok');
+  $browse_butt->signal_connect (clicked =>
+				 sub {
+				     if ($self->{sftp}) {
+				       my $tree_box;
+				       ($tree_box, $tree) = sftp_browser_create ($self->{sftp});
+				       $table->attach_defaults ($tree_box, 0, 5, 3, 4);
+                                     }
+                                     else {::show_msg ('error', ::text ('not connected'))}
+				 });
   $dialog->show_all;
-  $self->{entry}->set_text ('/');
 
   my $response = $dialog->run;
 
-  if ($response eq 'ok') {
-    if (! $self->{sftp}) {
-      $self->{sftp}  = sftp_connect ($host_entr->get_text,
-				     $port_entr->get_text,
-				     $login_entr->get_text,
-				     $pass_entr->get_text);
-    }
-    if ($self->{sftp}) {
-      $self->{protocol_label}->set_text ($login_entr->get_text
-					 .'@'. $host_entr->get_text);
+  if ($self->{sftp}) {
+    $self->{sftp_host} = $host_entr->get_text;
+    $self->{sftp_port} = $port_entr->get_text;
+    $self->{sftp_login} = $login_entr->get_text;
+    $self->{sftp_password} = $pass_entr->get_text;
 
-      if ($tree) {
-	my $sel_iter = $tree->get_selection()->get_selected();
-	my $dir = tree_path ($tree, $sel_iter);
-	$self->{entry}->set_text ($dir);
-      }
+    $self->{protocol_label}->set_text ($login_entr->get_text
+				       .'@'. $host_entr->get_text);
+
+    if ($tree) {
+      my $sel_iter = $tree->get_selection()->get_selected();
+      my $dir = tree_path ($tree, $sel_iter);
+      $self->{entry}->set_text ($dir);
     }
-  }
-  else {
-    # ?? 
-    #$self->{sftp}->disconnect () if $self->{sftp};
-    #$self->{sftp} = undef;
+    else {
+      $self->{entry}->set_text ('/');
+    }
   }
   $dialog->destroy;
 }
@@ -592,8 +621,6 @@ use MIME::Base64 qw(decode_base64);
 use File::Compare;
 
 my ($start_dir_1, $start_dir_2);
-
-
 
 my $dir_box_a;
 my $dir_box_b;
@@ -1153,7 +1180,6 @@ sub clear_func {
   my ($self, $path) = @_;
 }
 
-
 #---------------------------------------------------------------------------
 # обработка  строки директории
 
@@ -1193,6 +1219,11 @@ sub envar {
     $str =~ s/^\$.+\//$ENV{$var}/e;
   }
   return $str;
+}
+
+END {
+  $dir_box_a->sftp_disconnect;
+  $dir_box_b->sftp_disconnect;
 }
 
 BEGIN {
