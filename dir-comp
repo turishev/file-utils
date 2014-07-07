@@ -618,6 +618,7 @@ use Glib qw /TRUE FALSE/;
 use utf8;
 use open ':utf8';
 use Gtk2 '-init';
+use File::Find;
 use File::Copy;
 use File::Path;
 use File::Basename  qw/dirname/;;
@@ -900,31 +901,25 @@ sub diff_files {
   system ("$editor /tmp/dircmp.diff");
 }
 
-my @subdirs;
-
 sub create_path_list {
-  my ($start_dir, $dir, $res) = @_;
-
-  if ($dir eq '') {
-    @$res = ();
-    @subdirs = ();
+  my ($start_dir, $res) = @_;
+  eval {
+    find ({wanted => sub {
+            return if /^\.\.?$/;
+            my $path = decode ('utf8', $File::Find::name);
+            my ($dir, $p) = ($path =~ /($start_dir)(.+)/);
+            $res->{$p} = 1;
+	  }},
+	  encode ('utf8', $start_dir));
+  };
+  if ($@) {
+    show_msg ('error', "Find file error: $@\n$start_dir");
   }
+}
 
-  opendir (DIR, $start_dir . '/' . $dir);
-  while (my $item = readdir(DIR)) {
-    next if $item =~ /^\.{1,2}$/;
-
-    my $path = $dir . '/' . Encode::decode ("utf-8", $item);
-    if (-d $start_dir . '/' . $path) {
-      push @subdirs, $path;
-    }
-    else {
-      push @$res, $path;
-    }
-  }
-  close DIR;
-
-  create_path_list ($start_dir, shift @subdirs, $res) if (@subdirs);
+sub create_sftp_path_list {
+  my ($sftp, $start_dir, $dir, $res) = shift;
+  @$res = $sftp->find ($start_dir);
 }
 
 sub comp_content {
@@ -932,7 +927,8 @@ sub comp_content {
   my $path_b =  $dir_box_b->get . '/'. Result_List::selected_name();
   ( -e $path_a and -e $path_b) or return;
 
-  my $res = (compare ($path_a, $path_b) == 0 ? "Content is equevalent" : "Content is different");
+  my $res = (compare ($path_a, $path_b) == 0 ?
+	     "Content is equevalent" : "Content is different");
 
   show_msg ('info', $res);
 }
@@ -943,52 +939,46 @@ sub start_compare {
   my $check_size = $chk_size->get_active;
 
   ($start_dir_1, $start_dir_2) = ($dir_box_a->get, $dir_box_b->get);
-  my (@path_list_1 ,@path_list_2);
 
   Result_List::clear();
 
   $start_dir_1 ne $start_dir_2 || return;
 
-  create_path_list ($start_dir_1, '', \@path_list_1);
-  create_path_list ($start_dir_2, '', \@path_list_2);
+  my (%names_1, %names_2);
+  create_path_list ($start_dir_1, \%names_1);
+  create_path_list ($start_dir_2, \%names_2);
 
-  my %not_need_check;
+  for my $f (keys %names_1) {
+    if (! exists $names_2{$f}) {
+      my %info_1 = get_file_info ($start_dir_1 . $f);
+      Result_List::add ($f, \%info_1, '');
+    }
+    else {
+      my %info_1 = get_file_info ($start_dir_1 . $f);
+      my %info_2 = get_file_info ($start_dir_2 . $f);
+      my $res = 0;
 
-  for my $f (@path_list_1) {
-    if (not -f $start_dir_2 . $f) {
-      my %info_a = get_file_info ($start_dir_1 . $f);
-      Result_List::add ($f, \%info_a, '');
-      $not_need_check {$f} = 1;
-    };
-  }
+      if ($info_1{type} ne $info_2{type}
+	  or ($check_size and $info_1{size} ne $info_2{size})
+	  or ($check_date and $info_1{mtime} ne $info_2{mtime})) {
+	$res = 1;
+      }
 
-  for my $f (@path_list_2) {
-    if (not -f $start_dir_1 . $f) {
-      my %info_b = get_file_info ($start_dir_2 . $f);
-      Result_List::add ($f, '', \%info_b);
+      if ($check_content) {
+	if (compare ($start_dir_1 . $f, $start_dir_2 . $f)) {
+	  $res = 1;
+	  $info_1{content} = 1;
+	  $info_2{content} = 1;
+	}
+      }
+      Result_List::add ($f, \%info_1, \%info_2) if $res;
     }
   }
 
-  for my $f (@path_list_1) {
-    if (not exists ($not_need_check {$f})) {
-       my %info_a = get_file_info ($start_dir_1 . $f);
-       my %info_b = get_file_info ($start_dir_2 . $f);
-       my $res = 0;
-
-       if ($info_a{type} ne $info_b{type}
-           or ($check_size and $info_a{size} ne $info_b{size})
-           or ($check_date and $info_a{mtime} ne $info_b{mtime})) {
-          $res = 1;
-       }
-
-       if ($check_content) {
-          if (compare ($start_dir_1 . $f, $start_dir_2 . $f)) {
-            $res = 1;
-            $info_a{content} = 1;
-            $info_b{content} = 1;
-          }
-       }
-       Result_List::add ($f, \%info_a, \%info_b) if $res;
+  for my $f (keys %names_2) {
+    if (! exists $names_1{$f}) {
+      my %info_2 = get_file_info ($start_dir_2 . $f);
+      Result_List::add ($f, '', \%info_2);
     }
   }
 }
