@@ -594,6 +594,11 @@ sub get {
   return $path;
 }
 
+sub sftp {
+  my $self = shift;
+  return $self ->{sftp};
+}
+
 sub set {
   my ($self, $str) = @_;
   $self->{entry}->set_text ($str);
@@ -918,8 +923,17 @@ sub create_path_list {
 }
 
 sub create_sftp_path_list {
-  my ($sftp, $start_dir, $dir, $res) = shift;
-  @$res = $sftp->find ($start_dir);
+  my ($sftp, $start_dir, $res) = @_;
+  @list = $sftp->find ($start_dir);
+  for my $f (@list) {
+    my $n = $f->{filename};
+    #print "sftp name:$n\n";
+    my ($dir, $p) = ($n =~ /($start_dir)(.+)/);
+    next if ! $p;
+    # name(relative path) => attributes
+    $res->{$p} = $f->{a};
+    print "$dir , $p,", $res->{$p}->perm, "\n";
+  }
 }
 
 sub comp_content {
@@ -938,15 +952,27 @@ sub start_compare {
   my $check_content  = $chk_content->get_active;
   my $check_size = $chk_size->get_active;
 
-  ($start_dir_1, $start_dir_2) = ($dir_box_a->get, $dir_box_b->get);
+  my ($start_dir_1, $start_dir_2) = ($dir_box_a->get, $dir_box_b->get);
+  my ($sftp_1, $sftp_2) = ($dir_box_a->sftp, $dir_box_b->sftp);
 
   Result_List::clear();
 
   $start_dir_1 ne $start_dir_2 || return;
 
   my (%names_1, %names_2);
-  create_path_list ($start_dir_1, \%names_1);
-  create_path_list ($start_dir_2, \%names_2);
+  if ($sftp_1) {
+    create_sftp_path_list ($sftp_1, $start_dir_1, \%names_1);
+  }
+  else {
+    create_path_list ($start_dir_1, \%names_1);
+  }
+
+  if ($sftp_2) {
+    create_sftp_path_list ($sftp_2, $start_dir_2, \%names_2);
+  }
+  else {
+    create_path_list ($start_dir_2, \%names_2);
+  }
 
   for my $f (keys %names_1) {
     if (! exists $names_2{$f}) {
