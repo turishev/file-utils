@@ -363,7 +363,7 @@ sub sftp_ls {
   my $ls = $sftp->ls ($dir ,
 		      wanted => sub {my $n=$_[1];
 				     $n->{filename} !~ /^\.{1,2}$/
-				       and S_ISDIR ($n->{a}->perm ());
+				       and ::file_type_format ($n->{a}->perm) eq 'dir';
 				   });
   my @dirs = sort map {$_->{filename}} @$ls ;
   return \@dirs;
@@ -477,7 +477,6 @@ sub sftp_run {
 
   require Net::SFTP::Foreign;
   require Net::SFTP::Foreign::Attributes;
-  use Fcntl qw (S_ISDIR :mode);
 
   my $dialog = Gtk2::Dialog->new (::text ("Select remote dir") 
 				  . ($self->{sftp} ? ' - connected':''),
@@ -906,14 +905,14 @@ sub diff_files {
   system ("$editor /tmp/dircmp.diff");
 }
 
-sub create_path_list {
+sub create_local_path_list {
   my ($start_dir, $res) = @_;
   eval {
     find ({wanted => sub {
             return if /^\.\.?$/;
             my $path = decode ('utf8', $File::Find::name);
             my ($dir, $p) = ($path =~ /($start_dir)(.+)/);
-            $res->{$p} = 1;
+            $res->{$p} = {};
 	  }},
 	  encode ('utf8', $start_dir));
   };
@@ -924,15 +923,37 @@ sub create_path_list {
 
 sub create_sftp_path_list {
   my ($sftp, $start_dir, $res) = @_;
+
   @list = $sftp->find ($start_dir);
+
   for my $f (@list) {
     my $n = $f->{filename};
-    #print "sftp name:$n\n";
     my ($dir, $p) = ($n =~ /($start_dir)(.+)/);
     next if ! $p;
     # name(relative path) => attributes
-    $res->{$p} = $f->{a};
-    print "$dir , $p,", $res->{$p}->perm, "\n";
+    $res->{$p} = {type  => file_type_format ($f->{a}->perm),
+		  size  => num_format ($f->{a}->size),
+		  ctime => '',
+		  mtime => time_format ($f->{a}->mtime),
+		  perm  => perm_format ($f->{a}->perm),
+		  owner => $f->{a}->uid . ':' . $f->{a}->gid,
+		  other => ''};
+  }
+}
+
+sub create_path_list {
+  my ($sftp, $start_dir, $res) = @_;
+  $sftp ? create_sftp_path_list ($sftp, $start_dir, $res) :
+    create_local_path_list ($start_dir, $res);
+}
+
+sub get_file_attr {
+  my ($path, $attr) = @_;
+  if (exists $attr->{type}) {
+    return; # sftp allready set attrs
+  }
+  else {# local file
+   %$attr = get_file_info ($path);
   }
 }
 
@@ -960,51 +981,42 @@ sub start_compare {
   $start_dir_1 ne $start_dir_2 || return;
 
   my (%names_1, %names_2);
-  if ($sftp_1) {
-    create_sftp_path_list ($sftp_1, $start_dir_1, \%names_1);
-  }
-  else {
-    create_path_list ($start_dir_1, \%names_1);
-  }
 
-  if ($sftp_2) {
-    create_sftp_path_list ($sftp_2, $start_dir_2, \%names_2);
-  }
-  else {
-    create_path_list ($start_dir_2, \%names_2);
-  }
+  create_path_list ($sftp_1, $start_dir_1, \%names_1);
+  create_path_list ($sftp_2, $start_dir_2, \%names_2);
 
   for my $f (keys %names_1) {
     if (! exists $names_2{$f}) {
-      my %info_1 = get_file_info ($start_dir_1 . $f);
-      Result_List::add ($f, \%info_1, '');
+      get_file_attr ($start_dir_1 . $f, $names_1{$f});
+      Result_List::add ($f, $names_1{$f}, '');
     }
     else {
-      my %info_1 = get_file_info ($start_dir_1 . $f);
-      my %info_2 = get_file_info ($start_dir_2 . $f);
+      get_file_attr ($start_dir_1 . $f, $names_1{$f});
+      get_file_attr ($start_dir_2 . $f, $names_2{$f});
+
       my $res = 0;
 
-      if ($info_1{type} ne $info_2{type}
-	  or ($check_size and $info_1{size} ne $info_2{size})
-	  or ($check_date and $info_1{mtime} ne $info_2{mtime})) {
+      if ($names_1->{$f}->{type} ne $names_2->{$f}->{type}
+	  or ($check_size and $names_1->{$f}->{size} ne $names_2->{$f}->{size})
+	  or ($check_date and $names_1->{$f}->{mtime} ne $names_2->{$f}->{mtime})) {
 	$res = 1;
       }
 
       if ($check_content) {
 	if (compare ($start_dir_1 . $f, $start_dir_2 . $f)) {
 	  $res = 1;
-	  $info_1{content} = 1;
-	  $info_2{content} = 1;
+	  $names_1->{$f}->{content} = 1;
+	  $names_2->{$f}->{content} = 1;
 	}
       }
-      Result_List::add ($f, \%info_1, \%info_2) if $res;
+      Result_List::add ($f, $names_1{$f}, $names_2{$f}) if $res;
     }
   }
 
   for my $f (keys %names_2) {
     if (! exists $names_1{$f}) {
-      my %info_2 = get_file_info ($start_dir_2 . $f);
-      Result_List::add ($f, '', \%info_2);
+      get_file_attr ($start_dir_2 . $f, $names_2{$f});
+      Result_List::add ($f, '', $names_2{$f});
     }
   }
 }
@@ -1057,7 +1069,7 @@ sub get_file_info {
   #              11 blksize  preferred block size for file system I/O
   #              12 blocks   actual number of blocks allocated
 
-  my $type = file_type_format ($par[2] >> 12);
+  my $type = file_type_format ($par[2]);
   my $info;
   if ($type eq 'l') {
     $info = "-> ". readlink ($name);
@@ -1069,7 +1081,7 @@ sub get_file_info {
           size  => num_format($par[7]),
           ctime => time_format($par[10]),
           mtime => time_format($par[9]),
-          perm  => perm_format($par[2] & 07777),
+          perm  => perm_format($par[2]),
           owner => owner_format($par[4], $par[5]),
           other => $info);
 }
@@ -1099,6 +1111,7 @@ sub num_format {
 
 sub file_type_format {
   my $tp = shift;
+  $tp >>= 12;
   my %type_sym = (8  => 'file',
                   4  => 'dir',
                   10 => 'link',
@@ -1112,6 +1125,7 @@ sub file_type_format {
 
 sub perm_format {
   my $perm = shift;
+  $perm &= 07777;
   return sprintf "%04o", $perm;
 }
 
