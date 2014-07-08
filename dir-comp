@@ -628,8 +628,10 @@ use File::Path;
 use File::Basename  qw/dirname/;;
 use MIME::Base64 qw(decode_base64);
 use File::Compare;
+use strict;
 
-my ($start_dir_1, $start_dir_2);
+my ($start_dir_1, $start_dir_2, $sftp_1, $sftp_2);
+my ($icon_data, $lang, %local_text);
 
 my $dir_box_a;
 my $dir_box_b;
@@ -659,7 +661,7 @@ sub create_window {
   undef $icon_data;
 
   my $window = Gtk2::Window->new ('toplevel');
-  $window->signal_connect (destroy => on_exit);
+  $window->signal_connect (destroy => \&on_exit);
   $window->set_border_width (5);
   $window->set_title ($main_title);
   $window->set_size_request (640, 480);
@@ -670,14 +672,14 @@ sub create_window {
   $dir_box_b = Dir_Box->new ('B:');
 
   $mainbox->pack_start ($dir_box_a->box, FALSE, FALSE, 0);
-  $mainbox->pack_start ($dir_box_b->box, FALSE, FLASE, 0);
+  $mainbox->pack_start ($dir_box_b->box, FALSE, FALSE, 0);
 
   # кнопки управления
   my $hbox = Gtk2::HBox->new(TRUE);
   my $butt;
 
   $butt = Gtk2::Button->new (text ('Compare'));
-  $butt->signal_connect (clicked => start_compare, $window);
+  $butt->signal_connect (clicked => \&start_compare, $window);
   $hbox->pack_start ($butt, TRUE, TRUE, 0);
 
   $chk_size = Gtk2::CheckButton->new (text ('comp size'));
@@ -699,8 +701,8 @@ sub create_window {
 			   'Copy A to clipboard', sub {clipboard_copy('a')},
 			   'Copy B to clipboard', sub {clipboard_copy('b')},
 			   '---',0,
-			   'diff A and B', diff_files,
-			   'comp A and B content ', comp_content);
+			   'diff A and B', \&diff_files,
+			   'comp A and B content ', \&comp_content);
 
   #EventBox нужен для корректного позиционировани контекстного меню
   my $eventbox = Gtk2::EventBox->new();
@@ -717,16 +719,16 @@ sub create_window {
   $hbox = Gtk2::HBox->new(TRUE);
 
   $butt = Gtk2::Button->new (text ('Execute operations'));
-  $butt->signal_connect (clicked => operation_do, $window);
+  $butt->signal_connect (clicked => \&operation_do, $window);
   $hbox->pack_start ($butt, TRUE, TRUE, 0);
 
   $butt =  Gtk2::Button->new (text ('Exit'));
-  $butt->signal_connect (clicked => on_exit, $window);
+  $butt->signal_connect (clicked => \&on_exit, $window);
   $hbox -> pack_start ($butt, TRUE, TRUE, 0);
 
   $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
 
-  $window->signal_connect ('key-press-event' => window_press_key);
+  $window->signal_connect ('key-press-event' => \&window_press_key);
 
   $window -> add ($mainbox);
   $window -> show_all;
@@ -789,6 +791,7 @@ sub del_sp {
 sub operation_do {
   #print "operation_do\n";
   my ($err_oper, $err_del, $err_copy, $err_move);
+  our ($start_dir_1,  $start_dir_2);
 
   if (! show_msg ('question', 'Execute all operation?')) {
     return;
@@ -802,7 +805,7 @@ sub operation_do {
     # print "$p1,$p2\n";
     if ($row{a_cp} and ! $row{b_cp} and ! $row{b_del}) {
 
-      my $d = dirname($p2);
+      my $d = dirname ($p2);
 
       if (! -d $d) {
         my $dirs = eval {mkpath ($d)};
@@ -845,7 +848,7 @@ sub operation_do {
       }
     }
     else {
-      $err_oper .= " $oper{name}\n"
+      $err_oper .= " oper code error for \n$p1 \n$p2\n"
     }
   }
 
@@ -871,6 +874,7 @@ sub open_dir_handler {
   my $name = name_str (Result_List::selected_name());
   $name =~ s/\/[^\/]+?$//;
   $name = name_str ($name);
+  our $file_manager;
   system ("$file_manager $name &");
 }
 
@@ -924,7 +928,7 @@ sub create_local_path_list {
 sub create_sftp_path_list {
   my ($sftp, $start_dir, $res) = @_;
 
-  @list = $sftp->find ($start_dir);
+  my @list = $sftp->find ($start_dir);
 
   for my $f (@list) {
     my $n = $f->{filename};
@@ -973,9 +977,13 @@ sub start_compare {
   my $check_content  = $chk_content->get_active;
   my $check_size = $chk_size->get_active;
 
-  my ($start_dir_1, $start_dir_2) = ($dir_box_a->get, $dir_box_b->get);
-  my ($sftp_1, $sftp_2) = ($dir_box_a->sftp, $dir_box_b->sftp);
+  our ($start_dir_1, $start_dir_2) = ($dir_box_a->get, $dir_box_b->get);
+  our ($sftp_1, $sftp_2) = ($dir_box_a->sftp, $dir_box_b->sftp);
 
+  if (($sftp_1 || $sftp_2) &&  $check_content) {
+    show_msg ('error', text ('Check content not available with SFTP'));
+    return;
+  }
   Result_List::clear();
 
   $start_dir_1 ne $start_dir_2 || return;
@@ -984,7 +992,10 @@ sub start_compare {
 
   create_path_list ($sftp_1, $start_dir_1, \%names_1);
   create_path_list ($sftp_2, $start_dir_2, \%names_2);
-
+  # print "NAMES 1\n";
+  # map {print encode ("utf8", $_),"\n"} sort keys %names_1;
+  # print "NAMES 2\n";
+  # map {print encode ("utf8", $_),"\n"} sort keys %names_2;
   for my $f (keys %names_1) {
     if (! exists $names_2{$f}) {
       get_file_attr ($start_dir_1 . $f, $names_1{$f});
@@ -996,17 +1007,17 @@ sub start_compare {
 
       my $res = 0;
 
-      if ($names_1->{$f}->{type} ne $names_2->{$f}->{type}
-	  or ($check_size and $names_1->{$f}->{size} ne $names_2->{$f}->{size})
-	  or ($check_date and $names_1->{$f}->{mtime} ne $names_2->{$f}->{mtime})) {
+      if ($names_1{$f}->{type} ne $names_2{$f}->{type}
+	  or ($check_size and $names_1{$f}->{size} ne $names_2{$f}->{size})
+	  or ($check_date and $names_1{$f}->{mtime} ne $names_2{$f}->{mtime})) {
 	$res = 1;
       }
 
       if ($check_content) {
 	if (compare ($start_dir_1 . $f, $start_dir_2 . $f)) {
 	  $res = 1;
-	  $names_1->{$f}->{content} = 1;
-	  $names_2->{$f}->{content} = 1;
+	  $names_1{$f}->{content} = 1;
+	  $names_2{$f}->{content} = 1;
 	}
       }
       Result_List::add ($f, $names_1{$f}, $names_2{$f}) if $res;
@@ -1019,6 +1030,7 @@ sub start_compare {
       Result_List::add ($f, '', $names_2{$f});
     }
   }
+  Result_List::row_count == 0 and show_msg ('info', text ('No differences were found'));
 }
 
 sub on_exit {
@@ -1145,6 +1157,7 @@ sub rdev_format {
 ## localization #############################################################
 sub text {
   my $key = shift;
+  our ($lang, %local_text);
   $lang eq 'en' and return $key;
   #print "lang:$lang, key:$key->", $local_text {$key}->{$lang}, "\n";
   exists $local_text {$key}->{$lang} ? return $local_text {$key}->{$lang} : return $key;
@@ -1183,7 +1196,7 @@ sub clipboard_copy {
   };
 
   my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
-  $clipboard->set_with_data (get_func, clear_func, $path,
+  $clipboard->set_with_data (\&get_func, \&clear_func, $path,
                              ($target_text, $target_copy_file));
   $clipboard->store();
 
