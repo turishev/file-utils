@@ -274,15 +274,18 @@ use utf8;
 use Glib qw/TRUE FALSE/;
 
 sub new {
-  my ($class, $lab) = @_;
+  my $class = shift;
+  my %opt = @_;
+
   my $self = {};
   bless ($self, $class);
+  $self->{label} = $opt{label};
 
   my $hbox = Gtk2::HBox->new();
   my $entry = Gtk2::Entry->new;
   $hbox -> pack_end ($entry, TRUE, TRUE, 0);
 
-  my $lb = Gtk2::Label->new ($lab);
+  my $lb = Gtk2::Label->new ($self->{label});
   $hbox->pack_start ($lb, FALSE, TRUE, 0);
 
   my $butt = Gtk2::Button->new ('dir');
@@ -297,16 +300,21 @@ sub new {
   my $butt = Gtk2::Button->new ('SFTP');
   $butt->set_size_request(50);
   $hbox->pack_start ($butt, FALSE, TRUE, 0);
-  $butt->signal_connect (clicked => sub {
-                           Dir_Box::sftp_run ($self);
-                         }
-                        );
+
+  if (exists $opt {sftp_disable} and $opt {sftp_disable}) {
+    $butt->set_sensitive (0);
+  }
+  else {
+    $butt->signal_connect (clicked => sub {
+			     Dir_Box::sftp_run ($self);
+			   }
+			  );
+  }
 
   $self->{protocol_label} = Gtk2::Label->new ();
   $hbox->pack_start ($self->{protocol_label}, FALSE, TRUE, 0);
   $self->{entry} = $entry;
   $self->{box}   = $hbox;
-  $self->{label} = $lab;
   $self->{sftp}  = undef;
   $self->{sftp_host} = '';
   $self->{sftp_port} = '';
@@ -668,8 +676,8 @@ sub create_window {
 
   my $mainbox = Gtk2::VBox->new ();
 
-  $dir_box_a = Dir_Box->new ('A:');
-  $dir_box_b = Dir_Box->new ('B:');
+  $dir_box_a = Dir_Box->new (label => 'A:');
+  $dir_box_b = Dir_Box->new (label => 'B:', sftp_disable => 1);
 
   $mainbox->pack_start ($dir_box_a->box, FALSE, FALSE, 0);
   $mainbox->pack_start ($dir_box_b->box, FALSE, FALSE, 0);
