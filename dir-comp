@@ -127,15 +127,14 @@ my $editor      = 'leafpad';
 
     $name =~ s/^\///;
 
-    if (! $info_a->{type}) {
+    if (! $info_a->{size}) {
       $status = 'B';
     }
-    elsif (! $info_b->{type}) {
+    elsif (! $info_b->{size}) {
       $status = 'A';
     }
     else {
-      $status = ($info_a->{type} ne $info_b->{type} ? 't':'')
-      . ($info_a->{size} ne $info_b->{size} ?'s':'')
+      $status = ($info_a->{size} ne $info_b->{size} ?'s':'')
         . ($info_a->{mtime} ne  $info_b->{mtime} ?'d':'')
           . ($info_a->{perm} ne  $info_b->{perm} ?'p':'')
             . ($info_a->{owner} ne  $info_b->{owner} ?'o':'')
@@ -612,7 +611,7 @@ use MIME::Base64 qw(decode_base64);
 use File::Compare;
 use strict;
 
-my ($start_dir_1, $start_dir_2, $sftp_1, $sftp_2);
+my ($start_dir_a, $start_dir_b, $sftp_a, $sftp_b);
 my ($icon_data, $lang, %local_text);
 
 my $dir_box_a;
@@ -620,6 +619,7 @@ my $dir_box_b;
 my $chk_date;
 my $chk_content;
 my $chk_size;
+my $chk_show_all;
 my $main_window = create_window ();
 init_controls ();
 
@@ -674,6 +674,9 @@ sub create_window {
 
   $chk_content = Gtk2::CheckButton->new (text ('comp content'));
   $hbox -> pack_start ($chk_content, FALSE, FALSE, 0);
+
+  $chk_show_all = Gtk2::CheckButton->new (text ('show all'));
+  $hbox -> pack_start ($chk_show_all, FALSE, FALSE, 0);
 
   $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
 
@@ -835,7 +838,7 @@ sub oper_del {
 }
 
 sub operation_do {
-  our ($start_dir_1,  $start_dir_2, $sftp_1, $sftp_2);
+  our ($start_dir_a,  $start_dir_b, $sftp_a, $sftp_b);
 
   show_msg ('question', 'Execute all operation?') or return;
 
@@ -858,36 +861,36 @@ sub operation_do {
 
     my %row = Result_List::row ($i);
 
-    my $p1 =  $start_dir_1 . '/' . $row{name};
-    my $p2 =  $start_dir_2 . '/' . $row{name};
-    # print "$p1,$p2\n";
+    my $a =  $start_dir_a . '/' . $row{name};
+    my $b =  $start_dir_b . '/' . $row{name};
+    # print "$a,$b\n";
 
     if ($row{a_cp} and ! $row{b_cp} and ! $row{b_del}) {
       if (! $row{a_del}) { # copy A->B
-        &$check_err (oper_copy ($p1, $p2, $sftp_1, $sftp_2));
+        &$check_err (oper_copy ($a, $b, $sftp_a, $sftp_b));
       }
       else { # move A->B
-        &$check_err (oper_move ($p1, $p2, $sftp_1, $sftp_2));
+        &$check_err (oper_move ($a, $b, $sftp_a, $sftp_b));
       }
     }
     elsif (! $row{a_cp} and ! $row{a_del} and $row{b_cp}) {
       if (! $row{b_del}) {# copy B->A
-	&$check_err (oper_copy ($p2, $p1, $sftp_2, $sftp_1));
+	&$check_err (oper_copy ($b, $a, $sftp_b, $sftp_a));
       }
       else {# move B->A
-	&$check_err (oper_move ($p2, $p1, $sftp_2, $sftp_1));
+	&$check_err (oper_move ($b, $a, $sftp_b, $sftp_a));
       }
     }
     elsif (! $row{a_cp} and ! $row{b_cp}) {
       if ($row{a_del}) {
-	&$check_err (oper_del ($p1, $sftp_1));
+	&$check_err (oper_del ($a, $sftp_a));
       }
       if ($row{b_del}) {
-	&$check_err (oper_del ($p2, $sftp_2));
+	&$check_err (oper_del ($b, $sftp_b));
       }
     }
     else {
-      $err .= " oper code error for \n$p1 \n$p2\n"
+      $err .= " oper code error for \n$a \n$b\n"
     }
   }
 
@@ -913,10 +916,10 @@ sub open_dir_handler {
 sub open_handler {
   my $dir;
   if ($_[0] eq 'a') {
-     $dir = $start_dir_1;
+     $dir = $start_dir_a;
   }
   elsif ($_[0] eq 'b') {
-     $dir = $start_dir_2;
+     $dir = $start_dir_b;
   }
   else {return};
 
@@ -958,6 +961,17 @@ sub create_local_path_list {
   }
 }
 
+sub sftp_tmp_copy {
+  my ($sftp, $path) = @_;
+
+  require File::Temp;
+
+  my $tmp = File::Temp->new( TEMPLATE => 'dir-comp-sftp-XXXXX',
+			     DIR => '/tmp');
+  $sftp->get ($path, $tmp) or return "error get remote file\n'$path' ->\n'$tmp'";
+  return $tmp;
+}
+
 sub create_sftp_path_list {
   my ($sftp, $start_dir, $res) = @_;
 
@@ -986,8 +1000,17 @@ sub create_path_list {
 }
 
 sub comp_content {
-  my $path_a =  $dir_box_a->get . '/'. Result_List::selected_name();
-  my $path_b =  $dir_box_b->get . '/'. Result_List::selected_name();
+  my ($path_a, $path_b) = ($dir_box_a->get . '/'. Result_List::selected_name(),
+			   $dir_box_b->get . '/'. Result_List::selected_name());
+
+  if ($sftp_a) {
+    $path_a =  sftp_tmp_copy ($sftp_a, $path_a);
+  }
+
+  if ($sftp_b) {
+    $path_b =  sftp_tmp_copy ($sftp_b, $path_b);
+  }
+print "path:$path_a;$path_b\n";
   ( -e $path_a and -e $path_b) or return;
 
   my $res = (compare ($path_a, $path_b) == 0 ?
@@ -1000,52 +1023,55 @@ sub start_compare {
   my $check_date = $chk_date->get_active;
   my $check_content  = $chk_content->get_active;
   my $check_size = $chk_size->get_active;
+  my $show_all = $chk_show_all->get_active;
 
-  our ($start_dir_1, $start_dir_2) = ($dir_box_a->get, $dir_box_b->get);
-  our ($sftp_1, $sftp_2) = ($dir_box_a->sftp, $dir_box_b->sftp);
+  our ($start_dir_a, $start_dir_b) = ($dir_box_a->get, $dir_box_b->get);
+  our ($sftp_a, $sftp_b) = ($dir_box_a->sftp, $dir_box_b->sftp);
 
-  if (($sftp_1 || $sftp_2) &&  $check_content) {
+  if (($sftp_a || $sftp_b) &&  $check_content) {
     show_msg ('error', text ('Check content not available with SFTP'));
     return;
   }
   Result_List::clear();
 
-  $start_dir_1 ne $start_dir_2 || return;
+  $start_dir_a ne $start_dir_b || return;
 
-  my (%names_1, %names_2);
+  my (%names_a, %names_b);
 
-  create_path_list ($sftp_1, $start_dir_1, \%names_1);
-  create_path_list ($sftp_2, $start_dir_2, \%names_2);
+  create_path_list ($sftp_a, $start_dir_a, \%names_a);
+  create_path_list ($sftp_b, $start_dir_b, \%names_b);
 
-  for my $f (keys %names_1) {
-    if (! exists $names_2{$f}) {
-      Result_List::add ($f, $names_1{$f}, '');
+  for my $f (keys %names_a) {
+    if (! exists $names_b{$f}) {
+      Result_List::add ($f, $names_a{$f}, '');
     }
     else {
       my $res = 0;
 
-      if ($names_1{$f}->{type} ne $names_2{$f}->{type}
-	  or ($check_size and $names_1{$f}->{size} ne $names_2{$f}->{size})
-	  or ($check_date and $names_1{$f}->{mtime} ne $names_2{$f}->{mtime})) {
+      if ($names_a{$f}->{type} ne $names_b{$f}->{type}
+	  or ($check_size and $names_a{$f}->{size} ne $names_b{$f}->{size})
+	  or ($check_date and $names_a{$f}->{mtime} ne $names_b{$f}->{mtime})) {
 	$res = 1;
       }
 
       if ($check_content) {
-	if (compare ($start_dir_1 . $f, $start_dir_2 . $f)) {
+	if (compare ($start_dir_a . $f, $start_dir_b . $f)) {
 	  $res = 1;
-	  $names_1{$f}->{content} = 1;
-	  $names_2{$f}->{content} = 1;
+	  $names_a{$f}->{content} = 1;
+	  $names_b{$f}->{content} = 1;
 	}
       }
-      Result_List::add ($f, $names_1{$f}, $names_2{$f}) if $res;
+
+      Result_List::add ($f, $names_a{$f}, $names_b{$f}) if $res or $show_all;
     }
   }
 
-  for my $f (keys %names_2) {
-    if (! exists $names_1{$f}) {
-      Result_List::add ($f, '', $names_2{$f});
+  for my $f (keys %names_b) {
+    if (! exists $names_a{$f}) {
+      Result_List::add ($f, '', $names_b{$f});
     }
   }
+
   Result_List::row_count == 0 and show_msg ('info', text ('No differences were found'));
 }
 
