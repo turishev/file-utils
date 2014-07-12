@@ -24,8 +24,6 @@ my $editor      = 'leafpad';
 	       {id=>'a_del',   caption=>'del A', type=>'bool', align=> 0.5},
 	       {id=>'b_cp',    caption=>'B->A',  type=>'bool', align=> 0.5},
 	       {id=>'b_del',   caption=>'del B', type=>'bool', align=> 0.5},
-	       {id=>'type_a',  caption=>::text ('type A'),type=>'text', align=> 0.5},
-	       {id=>'type_b',  caption=>::text ('type B'),type=>'text', align=> 0.5},
 	       {id=>'size_a',  caption=>::text ('size A'),type=>'text', align=> 1},
 	       {id=>'size_b',  caption=>::text ('size B'),type=>'text', align=> 1},
 	       {id=>'time_a',  caption=>::text ('time A'),type=>'text', align=> 0},
@@ -146,8 +144,6 @@ my $editor      = 'leafpad';
     my @data;
     $data[$clm{name}]    = $name;
     $data[$clm{diff}]    = $status;
-    $data[$clm{type_a}]  = $info_a->{type};
-    $data[$clm{type_b}]  = $info_b->{type};
     $data[$clm{size_a}]  = $info_a->{size};
     $data[$clm{size_b}]  = $info_b->{size};
     $data[$clm{time_a}]  = $info_a->{ctime};
@@ -267,9 +263,7 @@ sub hide {
 }
 
 # END Menu ###########################################################
-{
 package Dir_Box;
-
 use utf8;
 use Glib qw/TRUE FALSE/;
 
@@ -292,10 +286,7 @@ sub new {
   $butt->set_size_request(50);
 
   $hbox->pack_start ($butt, FALSE, TRUE, 0);
-  $butt->signal_connect (clicked => sub {
-                           my $res = Dir_Box::file_dialog_run ($self, $lab);
-                         }
-                        );
+  $butt->signal_connect (clicked => \&Dir_Box::file_dialog_run, $self);
 
   my $butt = Gtk2::Button->new ('SFTP');
   $butt->set_size_request(50);
@@ -305,10 +296,7 @@ sub new {
     $butt->set_sensitive (0);
   }
   else {
-    $butt->signal_connect (clicked => sub {
-			     Dir_Box::sftp_run ($self);
-			   }
-			  );
+    $butt->signal_connect (clicked => \&Dir_Box::sftp_run, $self);
   }
 
   $self->{protocol_label} = Gtk2::Label->new ();
@@ -324,15 +312,9 @@ sub new {
   return  $self;
 }
 
-sub select_dir {
-  my $self = shift;
-  my $res = Dir_Box::dialog_run ($self->{label});
-  $self->{entry}->set_text ($res) if $res;
-}
-
 sub file_dialog_run {
-  my $self = shift;
-  my $caption = $self->{lab};
+  my ($widget, $self) = @_;
+  my $caption = $self->{label};
 
   my $dialog = Gtk2::FileChooserDialog->new
     (::text ('Select dir ') . $caption,
@@ -381,10 +363,6 @@ sub sftp_expand_dir {
   my ($view, $iter, $path, $sftp) = @_;
   #Gtk2::TreeView, Gtk2::TreeIter, Gtk2::TreePath
   my $model = $view->get_model;
-#  my @inx = $path->get_indices ();
-#  print "inx:@inx\n";
-
-  # $child_num = $model->iter_n_children ($iter);
 
   my $first_child = $model->iter_children ($iter);
   my $first_val = $model->get_value ($first_child);
@@ -400,7 +378,6 @@ sub sftp_expand_dir {
     }
 
     for my $n (@$names) {
-      #print "add:$n\n";
       my $it = $model->append ($iter);
       $model->set ($it, 0 => $n);
       # add fictive '' children - need for expand dir work
@@ -432,12 +409,10 @@ sub sftp_browser_create {
   }
 
   my $tree_view = Gtk2::TreeView->new ($model);
-  #$tree_view->signal_connect ('row-expanded'=>\&sftp_expand_dir, $sftp);
   $tree_view->signal_connect ('test-expand-row'=>\&sftp_expand_dir, $sftp);
   $tree_view->set ('show-expanders', TRUE);
 
   my $tree_column = Gtk2::TreeViewColumn->new();
-  #$tree_column->set_expand(TRUE);
 
   $tree_column->set_title ("Click to sort");
   my $renderer = Gtk2::CellRendererText->new;
@@ -481,7 +456,7 @@ sub sftp_disconnect {
 }
 
 sub sftp_run {
-  my $self = shift;
+  my ($widget, $self) = @_;
 
   require Net::SFTP::Foreign;
   require Net::SFTP::Foreign::Attributes;
@@ -619,7 +594,6 @@ sub box {
 sub focus {
   my $self = shift;
   return $self ->{entry}->grab_focus;
-}
 }
 # END Dir_Box ########################################################
 
@@ -795,81 +769,131 @@ sub del_sp {
 
 ##############################################################################
 # обработчики
+sub oper_copy {
+  my ($src, $dst, $src_sftp, $dst_sftp) = @_;
+
+  if ($src_sftp) {
+    $src_sftp->get ($src, $dst, overwrite => 1)
+      or return "error get remote file '$src' ";
+  }
+  elsif ($dst_sftp) {
+    $dst_sftp->put ($src, $dst, overwrite => 1)
+      or return "error put file '$src' to remote '$dst'";
+  }
+  else { #local copy
+    my $d = dirname ($dst);
+
+    if (! -d $d) {
+      my $dirs = eval {mkpath ($d)};
+      return "create dir '$d' error $@\n" unless $dirs;
+    }
+
+    copy ($src, $dst) or return "copy error:'$src' ->\n'$dst'";
+  }
+  return '';
+}
+
+sub oper_move {
+  my ($src, $dst, $src_sftp, $dst_sftp) = @_;
+
+  if ($src_sftp) {
+    $src_sftp->get ($src, $dst, overwrite => 1)
+      or return "error get remote file '$src'";
+
+    $src_sftp->remove ($src)
+      or return "error remove remote file '$src'";
+  }
+  elsif ($dst_sftp) {
+    $dst_sftp->put ($src, $dst, overwrite => 1)
+      or return "error put file '$src' to remote '$dst'";
+
+    unlink $src or return "error delete local '$src'"
+  }
+  else { #local move
+    my $d = dirname ($dst);
+
+    if (! -d $d) {
+      my $dirs = eval {mkpath ($d)};
+      return "create dir error '$d' $@\n" unless $dirs;
+    }
+    move ($src, $dst) or return "move error:'$src' ->\n'$dst'";
+  }
+  return '';
+}
+
+sub oper_del {
+  my ($src, $sftp) = @_;
+
+  if ($sftp) {
+    $sftp->remove ($src)
+      or return "error remove remote file '$src'";
+  }
+  else {
+    unlink $src or return "error delete local '$src'"
+  }
+  return '';
+}
 
 sub operation_do {
-  #print "operation_do\n";
-  my ($err_oper, $err_del, $err_copy, $err_move);
-  our ($start_dir_1,  $start_dir_2);
+  our ($start_dir_1,  $start_dir_2, $sftp_1, $sftp_2);
 
-  if (! show_msg ('question', 'Execute all operation?')) {
-    return;
-  }
+  show_msg ('question', 'Execute all operation?') or return;
+
+  my ($err, $too_many_err);
+
+  my $check_err = sub {
+    return if $too_many_err or not $_[0];
+
+    if (length ($err) > 2000) {
+      $err .= "\n(Too many error)";
+      $too_many_err = 1;
+    }
+    else {
+      $err .= "\n" . $_[0];
+    }
+  };
 
   for (my $i = 0; $i < Result_List::row_count(); $i++) {
+    last if $too_many_err;
+
     my %row = Result_List::row ($i);
 
     my $p1 =  $start_dir_1 . '/' . $row{name};
     my $p2 =  $start_dir_2 . '/' . $row{name};
     # print "$p1,$p2\n";
+
     if ($row{a_cp} and ! $row{b_cp} and ! $row{b_del}) {
-
-      my $d = dirname ($p2);
-
-      if (! -d $d) {
-        my $dirs = eval {mkpath ($d)};
-        print STDERR "Failed to create $d: $@\n" unless $dirs;
+      if (! $row{a_del}) { # copy A->B
+        &$check_err (oper_copy ($p1, $p2, $sftp_1, $sftp_2));
       }
-
-      if (! $row{a_del}) {
-        # copy A->B
-        $err_copy .= "$p1 ->\n$p2\n" if not copy ($p1, $p2);
-      }
-      else {
-        # move A->B
-        $err_move .="$p1 ->\n$p2\n" if not move ($p1, $p2);
+      else { # move A->B
+        &$check_err (oper_move ($p1, $p2, $sftp_1, $sftp_2));
       }
     }
     elsif (! $row{a_cp} and ! $row{a_del} and $row{b_cp}) {
-
-      my $d = dirname ($p1);
-
-      if (! -d $d) {
-        my $dirs = eval {mkpath($d)};
-        print STDERR "Failed to create $d: $@\n" unless $dirs;
+      if (! $row{b_del}) {# copy B->A
+	&$check_err (oper_copy ($p2, $p1, $sftp_2, $sftp_1));
       }
-
-      if (! $row{b_del}) {
-        # copy A->B
-        $err_copy .= "$p2 ->\n$p1\n" if not copy ($p2, $p1);
-      }
-      else {
-        # move B->A
-        $err_move .="$p2 ->\n$p1\n" if not move ($p2, $p1);
+      else {# move B->A
+	&$check_err (oper_move ($p2, $p1, $sftp_2, $sftp_1));
       }
     }
     elsif (! $row{a_cp} and ! $row{b_cp}) {
       if ($row{a_del}) {
-        $err_del .= " $p1\n" if not unlink $p1;
+	&$check_err (oper_del ($p1, $sftp_1));
       }
       if ($row{b_del}) {
-        $err_del .= " $p2\n" if not unlink $p2;
+	&$check_err (oper_del ($p2, $sftp_2));
       }
     }
     else {
-      $err_oper .= " oper code error for \n$p1 \n$p2\n"
+      $err .= " oper code error for \n$p1 \n$p2\n"
     }
   }
-
-  my $err = ($err_oper ? text ("operation ignored") . "\n$err_oper":'')
-    . ($err_copy? text ('copy error') . "\n$err_copy":'')
-    . ($err_move? text ('move error') . "\n$err_move":'')
-    . ($err_del? text ('delete error'). "\n$err_del":'');
-
 
   if ($err) {
     show_msg ('error', $err);
   }
-
   start_compare();
 }
 
@@ -924,7 +948,8 @@ sub create_local_path_list {
             return if /^\.\.?$/;
             my $path = decode ('utf8', $File::Find::name);
             my ($dir, $p) = ($path =~ /($start_dir)(.+)/);
-            $res->{$p} = {};
+            my %attr = get_file_info ($path);
+            $res->{$p} = {%attr} if $attr{type} eq 'file';
 	  }},
 	  encode ('utf8', $start_dir));
   };
@@ -943,13 +968,14 @@ sub create_sftp_path_list {
     my ($dir, $p) = ($n =~ /($start_dir)(.+)/);
     next if ! $p;
     # name(relative path) => attributes
-    $res->{$p} = {type  => file_type_format ($f->{a}->perm),
+    my $type = file_type_format ($f->{a}->perm);
+    $res->{$p} = {type  => $type,
 		  size  => num_format ($f->{a}->size),
 		  ctime => '',
 		  mtime => time_format ($f->{a}->mtime),
 		  perm  => perm_format ($f->{a}->perm),
 		  owner => $f->{a}->uid . ':' . $f->{a}->gid,
-		  other => ''};
+		  other => ''} if $type eq 'file';
   }
 }
 
@@ -957,16 +983,6 @@ sub create_path_list {
   my ($sftp, $start_dir, $res) = @_;
   $sftp ? create_sftp_path_list ($sftp, $start_dir, $res) :
     create_local_path_list ($start_dir, $res);
-}
-
-sub get_file_attr {
-  my ($path, $attr) = @_;
-  if (exists $attr->{type}) {
-    return; # sftp allready set attrs
-  }
-  else {# local file
-   %$attr = get_file_info ($path);
-  }
 }
 
 sub comp_content {
@@ -1000,19 +1016,12 @@ sub start_compare {
 
   create_path_list ($sftp_1, $start_dir_1, \%names_1);
   create_path_list ($sftp_2, $start_dir_2, \%names_2);
-  # print "NAMES 1\n";
-  # map {print encode ("utf8", $_),"\n"} sort keys %names_1;
-  # print "NAMES 2\n";
-  # map {print encode ("utf8", $_),"\n"} sort keys %names_2;
+
   for my $f (keys %names_1) {
     if (! exists $names_2{$f}) {
-      get_file_attr ($start_dir_1 . $f, $names_1{$f});
       Result_List::add ($f, $names_1{$f}, '');
     }
     else {
-      get_file_attr ($start_dir_1 . $f, $names_1{$f});
-      get_file_attr ($start_dir_2 . $f, $names_2{$f});
-
       my $res = 0;
 
       if ($names_1{$f}->{type} ne $names_2{$f}->{type}
@@ -1034,7 +1043,6 @@ sub start_compare {
 
   for my $f (keys %names_2) {
     if (! exists $names_1{$f}) {
-      get_file_attr ($start_dir_2 . $f, $names_2{$f});
       Result_List::add ($f, '', $names_2{$f});
     }
   }
