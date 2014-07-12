@@ -122,31 +122,25 @@ my $editor      = 'leafpad';
 
   # добавление результата в список найденного
   sub add {
-    my ($name, $info_a, $info_b) = @_;
+    my ($name, $info_a, $info_b, $diff) = @_;
     my ($status);
 
     $name =~ s/^\///;
 
-    if (! $info_a->{size}) {
-      $status = 'B';
-    }
-    elsif (! $info_b->{size}) {
-      $status = 'A';
-    }
-    else {
-      $status = ($info_a->{size} ne $info_b->{size} ?'s':'')
-        . ($info_a->{mtime} ne  $info_b->{mtime} ?'d':'')
-          . ($info_a->{perm} ne  $info_b->{perm} ?'p':'')
-            . ($info_a->{owner} ne  $info_b->{owner} ?'o':'')
-              . (exists ($info_a->{content}) ? 'c':'');
-    }
+    $status = $diff;
+
+    # if ($status ne 'A' and $status ne 'B') {
+    # 	$status .= ($info_a->{perm} ne  $info_b->{perm} ?'p':'')
+    # 	  . ($info_a->{owner} ne  $info_b->{owner} ?'o':'');
+    # }
+
     my @data;
     $data[$clm{name}]    = $name;
     $data[$clm{diff}]    = $status;
     $data[$clm{size_a}]  = $info_a->{size};
     $data[$clm{size_b}]  = $info_b->{size};
-    $data[$clm{time_a}]  = $info_a->{ctime};
-    $data[$clm{time_b}]  = $info_b->{ctime};
+    $data[$clm{time_a}]  = $info_a->{mtime};
+    $data[$clm{time_b}]  = $info_b->{mtime};
     $data[$clm{perm_a}]  = $info_a->{perm};
     $data[$clm{perm_b}]  = $info_b->{perm};
     $data[$clm{owner_a}] = $info_a->{owner};
@@ -727,6 +721,9 @@ sub init_controls {
   Result_List::clear();
   $dir_box_a ->set($ENV{PWD});
   $dir_box_b ->set($ENV{PWD});
+ $dir_box_a ->set('/home/prog/myproj/xfce-add/sprav');
+ $dir_box_b ->set('/home/prog/myproj/xfce-add/копия');
+
   $dir_box_a->focus;
 }
 
@@ -1000,8 +997,9 @@ sub create_path_list {
 }
 
 sub comp_content {
-  my ($path_a, $path_b) = ($dir_box_a->get . '/'. Result_List::selected_name(),
-			   $dir_box_b->get . '/'. Result_List::selected_name());
+  our ($start_dir_a,  $start_dir_b, $sftp_a, $sftp_b);
+  my ($path_a, $path_b) = ($start_dir_a . '/'. Result_List::selected_name(),
+			   $start_dir_b . '/'. Result_List::selected_name());
 
   if ($sftp_a) {
     $path_a =  sftp_tmp_copy ($sftp_a, $path_a);
@@ -1010,12 +1008,9 @@ sub comp_content {
   if ($sftp_b) {
     $path_b =  sftp_tmp_copy ($sftp_b, $path_b);
   }
-print "path:$path_a;$path_b\n";
-  ( -e $path_a and -e $path_b) or return;
 
   my $res = (compare ($path_a, $path_b) == 0 ?
 	     "Content is equevalent" : "Content is different");
-
   show_msg ('info', $res);
 }
 
@@ -1043,32 +1038,35 @@ sub start_compare {
 
   for my $f (keys %names_a) {
     if (! exists $names_b{$f}) {
-      Result_List::add ($f, $names_a{$f}, '');
+      Result_List::add ($f, $names_a{$f}, '', 'A');
     }
     else {
-      my $res = 0;
+      my ($diff, $res);
+      if ($names_a{$f}->{size} ne $names_b{$f}->{size}) {
+	$diff .= 's';
+	$res ||= $check_size;
+      }
 
-      if ($names_a{$f}->{type} ne $names_b{$f}->{type}
-	  or ($check_size and $names_a{$f}->{size} ne $names_b{$f}->{size})
-	  or ($check_date and $names_a{$f}->{mtime} ne $names_b{$f}->{mtime})) {
+      if  ($names_a{$f}->{mtime} ne $names_b{$f}->{mtime}) {
+	$diff .= 't';
+	$res ||=  $check_date;
+      }
+
+      if ($check_content and compare ($start_dir_a . $f, $start_dir_b . $f)) {
+        # проверка только при установке флажка
+	$diff .= 'c';
 	$res = 1;
       }
 
-      if ($check_content) {
-	if (compare ($start_dir_a . $f, $start_dir_b . $f)) {
-	  $res = 1;
-	  $names_a{$f}->{content} = 1;
-	  $names_b{$f}->{content} = 1;
-	}
-      }
+      ! $diff and $show_all and  $diff = '=' and $res = 1;
 
-      Result_List::add ($f, $names_a{$f}, $names_b{$f}) if $res or $show_all;
+      Result_List::add ($f, $names_a{$f}, $names_b{$f}, $diff) if $res;
     }
   }
 
   for my $f (keys %names_b) {
     if (! exists $names_a{$f}) {
-      Result_List::add ($f, '', $names_b{$f});
+      Result_List::add ($f, '', $names_b{$f}, 'B');
     }
   }
 
