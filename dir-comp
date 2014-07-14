@@ -661,15 +661,15 @@ sub create_window {
   $butt->signal_connect (clicked => \&start_compare, $window);
   $hbox->pack_start ($butt, TRUE, TRUE, 0);
 
-  $chk_size = Gtk2::CheckButton->new (text ('comp size'));
+  $chk_size = Gtk2::CheckButton->new (text ('size'));
   $chk_size->set_active (TRUE);
   $hbox -> pack_start ($chk_size, FALSE, FALSE, 0);
 
-  $chk_date = Gtk2::CheckButton->new (text ('comp time'));
+  $chk_date = Gtk2::CheckButton->new (text ('time'));
   # $chk_date->set_active (TRUE);
   $hbox -> pack_start ($chk_date, FALSE, FALSE, 0);
 
-  $chk_content = Gtk2::CheckButton->new (text ('comp content'));
+  $chk_content = Gtk2::CheckButton->new (text ('content'));
   $hbox -> pack_start ($chk_content, FALSE, FALSE, 0);
 
   $chk_show_all = Gtk2::CheckButton->new (text ('show all'));
@@ -755,21 +755,31 @@ sub show_msg {
   }
 }
 
-##############################################################################
-sub name_str {
-  my $namestr = "";
-  for my $nm (@_) {
-    $nm =~ s/"/\\\"/g;
-    $namestr .= " \"$nm\"";
-  }
-  return $namestr;
-}
+sub show_text {
+  my ($text, $title) = @_;
+  my $dialog = Gtk2::Dialog->new ($title,
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-ok'     => 'ok');
 
-sub del_sp {
-  my $s = shift;
-  $s =~ s/^\s+//;
-  $s =~ s/\s+$//;
-  return $s;
+  $dialog->set_size_request (640, 480);
+ # $dialog->set_title ($title);
+
+  my $textview = Gtk2::TextView->new();
+  my $scroll = Gtk2::ScrolledWindow->new;
+  $scroll->set_policy ('automatic', 'automatic');
+  $scroll->add ($textview);
+
+  $textview->set_editable (FALSE);
+  $textview->set_wrap_mode ('word');
+
+  my $buffer = $textview->get_buffer();
+  $buffer->set_text ($text);
+
+  $dialog->vbox->add ($scroll);
+  $dialog->show_all;
+  my $response = $dialog->run;
+  $dialog->destroy;
 }
 
 ##############################################################################
@@ -997,7 +1007,7 @@ sub diff_files {
   my $path_b =  $dir_box_b->get . '/'. $row{name};
 
   if ($sftp_a) {
-    my $path_a = eval {
+      $path_a = eval {
       sftp_tmp_copy ($sftp_a, $path_a);
     };
     if ($@) {
@@ -1006,11 +1016,11 @@ sub diff_files {
     }
   }
 
-  ( -e $path_a and -e $path_b) or return;
-  if (not fork) {
-    system ("diff -u $path_a $path_b >/tmp/dircmp.diff");
-    system ($editor, "/tmp/dircmp.diff");
-  }
+  open my $fh, '-|', 'diff', '-u', $path_a, $path_b or die "Can't open pipe: $!";
+  my $out;
+  $out .= $_ while <$fh>;
+  close $fh;
+  show_text ($out, "diff ".$row{name});
 }
 
 sub create_local_path_list {
@@ -1075,7 +1085,11 @@ sub comp_content {
 			   $start_dir_b . '/'. Result_List::selected_name());
 
   if ($sftp_a) {
-    $path_a =  sftp_tmp_copy ($sftp_a, $path_a);
+    $path_a = eval { sftp_tmp_copy ($sftp_a, $path_a) };
+    if ($@) {
+      show_msg ("SFTP error:$@\n");
+      return;
+    }
   }
 
   my $res = (compare ($path_a, $path_b) == 0 ?
@@ -1402,10 +1416,10 @@ END_ICON
 		 'time B'                => {ru => 'время B'},
                  'size A'                => {ru => 'размер A'},
                  'size B'                => {ru => 'размер B'},
-                 'Compare'               => {ru => 'Сравнить каталоги'},
-		 'comp size'             => {ru => 'учесть размер'},
-                 'comp time'             => {ru => 'учесть время'},
-                 'comp content'          => {ru => 'сравнивать содержимое'},
+                 'Compare'               => {ru => 'Сравнить'},
+		 'size'                  => {ru => 'размер'},
+                 'time'                  => {ru => 'время'},
+                 'content'               => {ru => 'содержимое'},
                  'Open A'                => {ru => 'Открыть A'},
 		 'Open B'                => {ru => 'Открыть B'},
 		 'Copy A to clipboard'   => {ru => 'Копировать A в буфер'},
@@ -1421,6 +1435,7 @@ END_ICON
 		 'copy error'            => {ru => 'Ошибки копирования'},
 		 'move error'            => {ru => 'Ошибки перемещения'},
                  'delete error'          => {ru => 'Ошибки удаления'},
+		 'show all'              => {ru => 'показать все'},
 		);
 
   $lang = get_lang();
