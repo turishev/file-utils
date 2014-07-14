@@ -8,7 +8,7 @@
 my $main_title  = 'dir-comp';
 my $open_helper = 'exo-open';
 my $editor      = 'leafpad';
-my $file_manager="thunar";
+
 
 #######################################################################
 {
@@ -506,7 +506,7 @@ sub sftp_run {
   else {
     $host_entr->set_text ('localhost');
     $login_entr->set_text ('prog');
- #   $pass_entr->set_text ('sss');
+    $pass_entr->set_text ('sss');
     $port_entr->set_text ('22');
   }
 
@@ -552,7 +552,7 @@ sub sftp_run {
       $self->{entry}->set_text ($dir);
     }
     else {
-      $self->{entry}->set_text ('/');
+      #$self->{entry}->set_text ('/');
     }
   }
   $dialog->destroy;
@@ -617,6 +617,8 @@ my $chk_size;
 my $chk_show_all;
 my $main_window = create_window ();
 init_controls ();
+
+my @tmp_files;
 
 Gtk2->main;
 0;
@@ -901,27 +903,29 @@ sub edit_handler {
   system ("$editor $name &");
 }
 
-sub open_dir_handler {
-  my $name = name_str (Result_List::selected_name());
-  $name =~ s/\/[^\/]+?$//;
-  $name = name_str ($name);
-  system ("$file_manager $name &");
-}
-
 sub open_handler {
-  my $dir;
-  if ($_[0] eq 'a') {
-     $dir = $start_dir_a;
-  }
-  elsif ($_[0] eq 'b') {
-     $dir = $start_dir_b;
-  }
-  else {return};
+  my $dir = ($_[0] eq 'a' ? $start_dir_a : $start_dir_b);
 
-  my $name = name_str ($dir . '/'. Result_List::selected_name());
-  my $cmd = $open_helper . ' ' . $name;
-  print "$cmd\n";
-  system ($cmd);
+  my $name = $dir . '/'. Result_List::selected_name();
+
+  if ($sftp_a and $_[0] eq 'a') {
+    #$name = eval {
+    $name = sftp_tmp_copy ($sftp_a, $name);#};
+    if ($@) {
+      show_msg ("SFTP error:$@\n");
+      return;
+    }
+  }
+
+  if (-f $name) {
+    print STDERR "open:$name\n";
+    if (not fork) {
+      exec ($open_helper, $name);
+    }
+  }
+  else {
+    show_msg ("File '$name' not exists\n");
+  }
 }
 
 sub diff_files {
@@ -962,8 +966,10 @@ sub sftp_tmp_copy {
   require File::Temp;
 
   my $tmp = File::Temp->new( TEMPLATE => 'dir-comp-sftp-XXXXX',
-			     DIR => '/tmp');
-  $sftp->get ($path, $tmp) or return "error get remote file\n'$path' ->\n'$tmp'";
+			     DIR      => '/tmp',
+			     UNLINK   => 0);
+  $sftp->get ($path, $tmp) or die "error get remote file\n'$path'\nto\n'$tmp'";
+  push @tmp_files, {file=>$tmp, orig=>$path, info=>'sftp'};
   return $tmp;
 }
 
@@ -1294,7 +1300,10 @@ sub envar {
 
 END {
   $dir_box_a->sftp_disconnect;
-  $dir_box_b->sftp_disconnect;
+  for my $f (@tmp_files) {
+    print STDERR "cleanup tmp:$f->{file}\n";
+    unlink $f->{file};
+  }
 }
 
 BEGIN {
