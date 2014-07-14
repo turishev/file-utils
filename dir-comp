@@ -606,7 +606,7 @@ use MIME::Base64 qw(decode_base64);
 use File::Compare;
 use strict;
 
-my ($start_dir_a, $start_dir_b, $sftp_a, $sftp_b);
+my ($start_dir_a, $start_dir_b, $sftp_a);
 my ($icon_data, $lang, %local_text);
 
 my $dir_box_a;
@@ -772,45 +772,62 @@ sub del_sp {
 
 ##############################################################################
 # обработчики
-sub oper_copy {
-  my ($src, $dst, $src_sftp, $dst_sftp) = @_;
+sub check_path {
+  my $d = dirname ($_[0]);
 
-  if ($src_sftp) {
-    $src_sftp->get ($src, $dst, overwrite => 1)
-      or return "error get remote file '$src' ";
+  if (! -d $d) {
+    my $dirs = eval {mkpath ($d)};
+    return "create dir '$d' error $@\n" unless $dirs;
   }
-  elsif ($dst_sftp) {
-    $dst_sftp->put ($src, $dst, overwrite => 1)
-      or return "error put file '$src' to remote '$dst'";
+  return undef;
+}
+
+sub sftp_check_path {
+
+}
+
+sub oper_copy {
+  my ($src, $dst, $sftp, $oper) = @_;
+
+  if ($sftp) {
+    if ($oper eq 'get') {
+      my $err = check_path ($dst);
+      $err and return $err;
+
+      $sftp->get ($src, $dst, overwrite => 1)
+	or return "error get remote file '$src'";
+    }
+    else  {#oper=put
+      $sftp->put ($src, $dst, overwrite => 1)
+	or return "error put file '$src' to remote '$dst'";
+    }
   }
   else { #local copy
-    my $d = dirname ($dst);
+    my $err = check_path ($dst);
+    $err and return $err;
 
-    if (! -d $d) {
-      my $dirs = eval {mkpath ($d)};
-      return "create dir '$d' error $@\n" unless $dirs;
-    }
-
-    copy ($src, $dst) or return "copy error:'$src' ->\n'$dst'";
+    copy ($src, $dst) or return "copy error:'$src'\nto '$dst'";
   }
   return '';
 }
 
 sub oper_move {
-  my ($src, $dst, $src_sftp, $dst_sftp) = @_;
+  my ($src, $dst, $sftp, $oper) = @_;
 
-  if ($src_sftp) {
-    $src_sftp->get ($src, $dst, overwrite => 1)
-      or return "error get remote file '$src'";
+  if ($sftp) {
+    if ($oper eq 'get') {
+      $sftp->get ($src, $dst, overwrite => 1)
+	or return "error get remote file '$src'";
 
-    $src_sftp->remove ($src)
-      or return "error remove remote file '$src'";
-  }
-  elsif ($dst_sftp) {
-    $dst_sftp->put ($src, $dst, overwrite => 1)
-      or return "error put file '$src' to remote '$dst'";
+      $sftp->remove ($src)
+	or return "error remove remote file '$src'";
+    }
+    else { #oper='put'
+      $sftp->put ($src, $dst, overwrite => 1)
+	or return "error put file '$src'\n to remote '$dst'";
 
-    unlink $src or return "error delete local '$src'"
+      unlink $src or return "error delete local '$src'";
+    }
   }
   else { #local move
     my $d = dirname ($dst);
@@ -819,7 +836,7 @@ sub oper_move {
       my $dirs = eval {mkpath ($d)};
       return "create dir error '$d' $@\n" unless $dirs;
     }
-    move ($src, $dst) or return "move error:'$src' ->\n'$dst'";
+    move ($src, $dst) or return "move error:'$src'\n to '$dst'";
   }
   return '';
 }
@@ -865,18 +882,18 @@ sub operation_do {
 
     if ($row{a_cp} and ! $row{b_cp} and ! $row{b_del}) {
       if (! $row{a_del}) { # copy A->B
-        &$check_err (oper_copy ($a, $b, $sftp_a, $sftp_b));
+        &$check_err (oper_copy ($a, $b, $sftp_a, 'get'));
       }
       else { # move A->B
-        &$check_err (oper_move ($a, $b, $sftp_a, $sftp_b));
+        &$check_err (oper_move ($a, $b, $sftp_a, 'get'));
       }
     }
     elsif (! $row{a_cp} and ! $row{a_del} and $row{b_cp}) {
       if (! $row{b_del}) {# copy B->A
-	&$check_err (oper_copy ($b, $a, $sftp_b, $sftp_a));
+	&$check_err (oper_copy ($b, $a, $sftp_a, 'put'));
       }
       else {# move B->A
-	&$check_err (oper_move ($b, $a, $sftp_b, $sftp_a));
+	&$check_err (oper_move ($b, $a, $sftp_a, 'put'));
       }
     }
     elsif (! $row{a_cp} and ! $row{b_cp}) {
@@ -884,7 +901,7 @@ sub operation_do {
 	&$check_err (oper_del ($a, $sftp_a));
       }
       if ($row{b_del}) {
-	&$check_err (oper_del ($b, $sftp_b));
+	&$check_err (oper_del ($b, undef));
       }
     }
     else {
@@ -1008,10 +1025,6 @@ sub comp_content {
     $path_a =  sftp_tmp_copy ($sftp_a, $path_a);
   }
 
-  if ($sftp_b) {
-    $path_b =  sftp_tmp_copy ($sftp_b, $path_b);
-  }
-
   my $res = (compare ($path_a, $path_b) == 0 ?
 	     "Content is equevalent" : "Content is different");
   show_msg ('info', $res);
@@ -1024,9 +1037,9 @@ sub start_compare {
   my $show_all = $chk_show_all->get_active;
 
   ($start_dir_a, $start_dir_b) = ($dir_box_a->get, $dir_box_b->get);
-  ($sftp_a, $sftp_b) = ($dir_box_a->sftp, $dir_box_b->sftp);
+  $sftp_a = $dir_box_a->sftp;
 
-  if (($sftp_a || $sftp_b) &&  $check_content) {
+  if ($sftp_a and $check_content) {
     show_msg ('error', text ('Check content not available with SFTP'));
     return;
   }
@@ -1037,7 +1050,7 @@ sub start_compare {
   my (%names_a, %names_b);
 
   create_path_list ($sftp_a, $start_dir_a, \%names_a);
-  create_path_list ($sftp_b, $start_dir_b, \%names_b);
+  create_path_list (undef,   $start_dir_b, \%names_b);
 
   for my $f (keys %names_a) {
     if (! exists $names_b{$f}) {
