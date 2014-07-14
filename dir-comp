@@ -679,6 +679,8 @@ sub create_window {
 
   my $menu = Menu::create ('Open A', sub {open_handler('a')},
 			   'Open B', sub {open_handler('b')},
+			   'Open A with ..', sub {open_with_dlg ('a')},
+			   'Open B with ..', sub {open_with_dlg ('b')},
 			   '---',0,
 			   'Copy A to clipboard', sub {clipboard_copy('a')},
 			   'Copy B to clipboard', sub {clipboard_copy('b')},
@@ -783,73 +785,90 @@ sub check_path {
 }
 
 sub sftp_check_path {
+  my $path = shift;
+  my $loop;
+  $loop = sub {
+    my $p = shift;
+    my $d = dirname ($p);
+    unless (-d $d) {
+      &$loop ($d);
+    }
+    if ($p eq $path) {
+      return undef;
+    }
+    else {
+      my $res = $sftp_a->mkdir($p);
+      return "error sftp mkdir '$p':$res" if not $res;
+    };
+  };
 
+  &$loop ($path);
 }
 
-sub oper_copy {
-  my ($src, $dst, $sftp, $oper) = @_;
+sub move_or_copy {
+  my ($name,  $src, $move) = @_;
+  my $path_a =  $start_dir_a . '/' . $name;
+  my $path_b =  $start_dir_b . '/' . $name;
 
-  if ($sftp) {
-    if ($oper eq 'get') {
-      my $err = check_path ($dst);
+  if ($sftp_a) {
+    if ($src eq 'a') {
+      my $err = check_path ($path_b);
       $err and return $err;
 
-      $sftp->get ($src, $dst, overwrite => 1)
-	or return "error get remote file '$src'";
+      $sftp_a->get ($path_a, $path_b, overwrite => 1)
+	or return "error get remote file '$path_a'\nto '$path_b'";
+
+      if ($move) {
+	$sftp_a->remove ($path_a)
+	  or return "error remove remote file '$path_a'";
+      }
     }
-    else  {#oper=put
-      $sftp->put ($src, $dst, overwrite => 1)
-	or return "error put file '$src' to remote '$dst'";
+    else  {#src=b
+      my $err = sftp_check_path ($path_a);
+      $err and return $err;
+
+      $sftp_a->put ($path_b, $path_a, overwrite => 1)
+	or return "error put file '$path_b' to remote '$path_a'";
+
+      unlink $path_b or return "error delete local '$path_b'" if $move;
     }
   }
   else { #local copy
-    my $err = check_path ($dst);
+    my ($s, $d) = ($src eq 'a' ? ($path_a, $path_b) : ($path_b, $path_a));
+    my $err = check_path ($d);
     $err and return $err;
 
-    copy ($src, $dst) or return "copy error:'$src'\nto '$dst'";
+    if ($move) {
+      move ($s, $d) or return "move error:'$s'\nto '$d'";
+    }
+    else {
+      copy ($s, $d) or return "copy error:'$s'\nto '$d'";
+    }
   }
-  return '';
+  return undef;
+}
+
+sub oper_copy {
+  my ($name,  $src) = @_;
+  return move_or_copy ($name,  $src, 0);
 }
 
 sub oper_move {
-  my ($src, $dst, $sftp, $oper) = @_;
-
-  if ($sftp) {
-    if ($oper eq 'get') {
-      $sftp->get ($src, $dst, overwrite => 1)
-	or return "error get remote file '$src'";
-
-      $sftp->remove ($src)
-	or return "error remove remote file '$src'";
-    }
-    else { #oper='put'
-      $sftp->put ($src, $dst, overwrite => 1)
-	or return "error put file '$src'\n to remote '$dst'";
-
-      unlink $src or return "error delete local '$src'";
-    }
-  }
-  else { #local move
-    my $d = dirname ($dst);
-
-    if (! -d $d) {
-      my $dirs = eval {mkpath ($d)};
-      return "create dir error '$d' $@\n" unless $dirs;
-    }
-    move ($src, $dst) or return "move error:'$src'\n to '$dst'";
-  }
-  return '';
+  my ($name,  $src) = @_;
+  return move_or_copy ($name,  $src, 1);
 }
 
 sub oper_del {
-  my ($src, $sftp) = @_;
+  my ($name, $letter) = @_;
+  my $path = ($letter eq 'a' ? $start_dir_a : $start_dir_b)
+    . '/' . $name;
 
-  if ($sftp) {
-    $sftp->remove ($src)
-      or return "error remove remote file '$src'";
+  if ($letter eq 'a' and $sftp_a) {
+    $sftp_a->remove ($path)
+      or return "error remove remote file '$path'";
   }
   else {
-    unlink $src or return "error delete local '$src'"
+    unlink $path or return "error delete local '$path'"
   }
   return '';
 }
@@ -876,32 +895,28 @@ sub operation_do {
 
     my %row = Result_List::row ($i);
 
-    my $a =  $start_dir_a . '/' . $row{name};
-    my $b =  $start_dir_b . '/' . $row{name};
-    # print "$a,$b\n";
-
     if ($row{a_cp} and ! $row{b_cp} and ! $row{b_del}) {
       if (! $row{a_del}) { # copy A->B
-        &$check_err (oper_copy ($a, $b, $sftp_a, 'get'));
+        &$check_err (oper_copy ($row{name}, 'a'));
       }
       else { # move A->B
-        &$check_err (oper_move ($a, $b, $sftp_a, 'get'));
+        &$check_err (oper_move ($row{name}, 'a'));
       }
     }
     elsif (! $row{a_cp} and ! $row{a_del} and $row{b_cp}) {
       if (! $row{b_del}) {# copy B->A
-	&$check_err (oper_copy ($b, $a, $sftp_a, 'put'));
+	&$check_err (oper_copy ($row{name}, 'b'));
       }
       else {# move B->A
-	&$check_err (oper_move ($b, $a, $sftp_a, 'put'));
+	&$check_err (oper_move ($row{name}, 'b'));
       }
     }
     elsif (! $row{a_cp} and ! $row{b_cp}) {
       if ($row{a_del}) {
-	&$check_err (oper_del ($a, $sftp_a));
+	&$check_err (oper_del ($row{name}), 'a');
       }
       if ($row{b_del}) {
-	&$check_err (oper_del ($b, undef));
+	&$check_err (oper_del ($row{name}), 'b');
       }
     }
     else {
@@ -915,19 +930,16 @@ sub operation_do {
   start_compare();
 }
 
-sub edit_handler {
-  my $name = name_str (Result_List::selected_name());
-  system ("$editor $name &");
-}
-
-sub open_handler {
-  my $dir = ($_[0] eq 'a' ? $start_dir_a : $start_dir_b);
+sub open_with {
+  my ($letter, @cmd) = @_;
+  my $dir = ($letter eq 'a' ? $start_dir_a : $start_dir_b);
 
   my $name = $dir . '/'. Result_List::selected_name();
 
-  if ($sftp_a and $_[0] eq 'a') {
-    #$name = eval {
-    $name = sftp_tmp_copy ($sftp_a, $name);#};
+  if ($sftp_a and $letter eq 'a') {
+    $name = eval {
+      return sftp_tmp_copy ($sftp_a, $name);
+    };
     if ($@) {
       show_msg ("SFTP error:$@\n");
       return;
@@ -937,12 +949,40 @@ sub open_handler {
   if (-f $name) {
     print STDERR "open:$name\n";
     if (not fork) {
-      exec ($open_helper, $name);
+      exec (@cmd, $name);
     }
   }
   else {
     show_msg ("File '$name' not exists\n");
   }
+}
+
+sub open_handler {
+  open_with ($_[0], $open_helper);
+}
+
+sub open_with_dlg {
+  my $letter = shift;
+
+  my $dialog = Gtk2::Dialog->new (text ("Open with"),
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-cancel' => 'cancel',
+				  'gtk-ok'     => 'ok');
+  $dialog->set_title (text ('Open ') . $letter . text (' with ..'));
+
+  my $entr = Gtk2::Entry->new;
+  $entr->set_width_chars (20);
+  $dialog->vbox->add ($entr);
+
+  $dialog->set_default_response ('cancel');
+  $dialog->show_all;
+  my $response = $dialog->run;
+
+  my @cmd = split /\s+/, $entr->get_text ();
+  #print "cmd:@cmd\n";
+  $dialog->destroy;
+  open_with ($letter, @cmd) if $response eq 'ok';
 }
 
 sub diff_files {
@@ -955,9 +995,22 @@ sub diff_files {
 
   my $path_a =  $dir_box_a->get . '/'. $row{name};
   my $path_b =  $dir_box_b->get . '/'. $row{name};
+
+  if ($sftp_a) {
+    my $path_a = eval {
+      sftp_tmp_copy ($sftp_a, $path_a);
+    };
+    if ($@) {
+      show_msg ("SFTP error:$@\n");
+      return;
+    }
+  }
+
   ( -e $path_a and -e $path_b) or return;
-  system ("diff -u " . name_str ($path_a,$path_b) . " >/tmp/dircmp.diff");
-  system ("$editor /tmp/dircmp.diff");
+  if (not fork) {
+    system ("diff -u $path_a $path_b >/tmp/dircmp.diff");
+    system ($editor, "/tmp/dircmp.diff");
+  }
 }
 
 sub create_local_path_list {
