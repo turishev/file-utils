@@ -288,6 +288,8 @@ sub new {
 
   if (exists $opt {sftp_disable} and $opt {sftp_disable}) {
     $butt->set_sensitive (0);
+    $butt->set_label ('');
+    #$butt->hide();
   }
   else {
     $butt->signal_connect (clicked => \&Dir_Box::sftp_run, $self);
@@ -460,9 +462,10 @@ sub sftp_run {
 				  $main_window,
 				  ['modal', 'destroy-with-parent'],
                                   'gtk-close' => 'close');
-
+  my $mainbox = Gtk2::VBox->new ();
+  $dialog->vbox->add ($mainbox);
   my $table = Gtk2::Table->new (4, 3, FALSE);
-  $dialog->vbox->add ($table);
+  $mainbox->pack_start ($table, FALSE, FALSE, 0);
 
   my $lb = Gtk2::Label->new (::text ('host'));
   $lb->set_alignment (1.0, 0.5);
@@ -491,11 +494,41 @@ sub sftp_run {
 
   $table->attach_defaults ($pass_entr, 3, 4, 1, 2);
 
-  my $connect_butt =  Gtk2::Button->new (::text ('Connect to host'));
-  $table->attach_defaults ($connect_butt, 0, 2, 2, 3);
+  my $tree;
 
-  my $browse_butt =  Gtk2::Button->new (::text ('Select dir'));
-  $table->attach_defaults ($browse_butt, 2, 4, 2, 3);
+  my $hbox = Gtk2::HBox->new(TRUE);
+  $mainbox->pack_start ($hbox, FALSE, FALSE, 0);
+
+  my $butt =  Gtk2::Button->new (::text ('Connect'));
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+  $butt->signal_connect (clicked =>
+			 sub {
+			   sftp_disconnect($self->{sftp}) if $self->{sftp};
+
+			   $self->{sftp}  = sftp_connect ($host_entr->get_text,
+							  $port_entr->get_text,
+							  $login_entr->get_text,
+							  $pass_entr->get_text);
+			   $dialog->set_title (::text ("Select remote dir")
+					       . ($self->{sftp} ? ' - connected':''));
+			 });
+
+
+  $butt =  Gtk2::Button->new (::text ('Select dir'));
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+  $butt->signal_connect (clicked =>
+			 sub {
+			   if ($self->{sftp}) {
+			     my $tree_box;
+			     ($tree_box, $tree) = sftp_browser_create ($self->{sftp});
+			     $table->attach_defaults ($tree_box, 0, 5, 3, 4);
+			   }
+			   else {::show_msg ('error', ::text ('not connected'))}
+			 });
+
+  $butt =  Gtk2::Button->new (::text ('Disconnect'));
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+  $butt->signal_connect (clicked =>sub {sftp_disconnect ($self)});
 
   if ($self->{sftp}) {
     $host_entr->set_text ($self->{sftp_host});
@@ -504,35 +537,15 @@ sub sftp_run {
     $pass_entr->set_text ($self->{sftp_password});
   }
   else {
-    $host_entr->set_text ('localhost');
+    $host_entr->set_text ('book');
     $login_entr->set_text ('prog');
     $pass_entr->set_text ('sss');
     $port_entr->set_text ('22');
   }
 
-  my $tree;
 
-  $connect_butt->signal_connect (clicked =>
-				 sub {
-                                   sftp_disconnect($self->{sftp}) if $self->{sftp};
 
-				   $self->{sftp}  = sftp_connect ($host_entr->get_text,
-								  $port_entr->get_text,
-								  $login_entr->get_text,
-								  $pass_entr->get_text);
-                                   $dialog->set_title (::text ("Select remote dir") 
-						       . ($self->{sftp} ? ' - connected':''));
-				 });
 
-  $browse_butt->signal_connect (clicked =>
-				 sub {
-				     if ($self->{sftp}) {
-				       my $tree_box;
-				       ($tree_box, $tree) = sftp_browser_create ($self->{sftp});
-				       $table->attach_defaults ($tree_box, 0, 5, 3, 4);
-                                     }
-                                     else {::show_msg ('error', ::text ('not connected'))}
-				 });
   $dialog->show_all;
 
   my $response = $dialog->run;
@@ -602,7 +615,7 @@ use Gtk2 '-init';
 use File::Find;
 use File::Copy;
 use File::Path;
-use File::Basename  qw/dirname/;;
+use File::Basename;
 use MIME::Base64 qw(decode_base64);
 use File::Compare;
 use strict;
@@ -680,12 +693,13 @@ sub create_window {
 
   my $menu = Menu::create ('Open A', sub {open_handler('a')},
 			   'Open B', sub {open_handler('b')},
+                           '---', 0,
 			   'Open A with ..', sub {open_with_dlg ('a')},
 			   'Open B with ..', sub {open_with_dlg ('b')},
-			   '---',0,
+			   '---', 0,
 			   'Copy A to clipboard', sub {clipboard_copy('a')},
 			   'Copy B to clipboard', sub {clipboard_copy('b')},
-			   '---',0,
+			   '---', 0,
 			   'diff A and B', \&diff_files,
 			   'comp A and B content ', \&comp_content);
 
@@ -727,8 +741,8 @@ sub init_controls {
   Result_List::clear();
   $dir_box_a ->set($ENV{PWD});
   $dir_box_b ->set($ENV{PWD});
- $dir_box_a ->set('/home/prog/myproj/xfce-add/sprav');
- $dir_box_b ->set('/home/prog/myproj/xfce-add/копия');
+ $dir_box_a ->set('/home/prog/tmp');
+ $dir_box_b ->set('/home/prog/tmp');
 
   $dir_box_a->focus;
 }
@@ -961,8 +975,8 @@ sub open_with {
   }
 
   if (-f $name) {
-    print STDERR "open:$name\n";
     if (not fork) {
+      print STDERR "open:@cmd $name\n";
       exec (@cmd, $name);
     }
   }
@@ -1024,7 +1038,7 @@ sub diff_files {
   my $out;
   $out .= $_ while <$fh>;
   close $fh;
-  show_text ($out, "diff ".$row{name});
+  show_text ($out, "diff:$row{name}");
 }
 
 sub create_local_path_list {
@@ -1049,8 +1063,10 @@ sub sftp_tmp_copy {
 
   require File::Temp;
 
-  my $tmp = File::Temp->new( TEMPLATE => 'dir-comp-sftp-XXXXX',
+  my ($name, $dir, $suff) = fileparse ($path,  qr/\.[^.]*$/);
+  my $tmp = File::Temp->new( TEMPLATE => "$name-$main_title-sftp-XXXXX",
 			     DIR      => '/tmp',
+                             SUFFIX   => $suff,
 			     UNLINK   => 0);
   $sftp->get ($path, $tmp) or die "error get remote file\n'$path'\nto\n'$tmp'";
   push @tmp_files, {file=>$tmp, orig=>$path, info=>'sftp'};
@@ -1123,10 +1139,10 @@ sub start_compare {
   create_path_list ($sftp_a, $start_dir_a, \%names_a);
   create_path_list (undef,   $start_dir_b, \%names_b);
 
-  print "LIST A:\n";
-  map {print encode ('utf-8',$_),"\n"} sort keys %names_a;
-  print "LIST B:\n";
-  map {print encode ('utf-8',$_),"\n"} sort keys %names_b;
+  # print "LIST A:\n";
+  # map {print encode ('utf-8',$_),"\n"} sort keys %names_a;
+  # print "LIST B:\n";
+  # map {print encode ('utf-8',$_),"\n"} sort keys %names_b;
 
   for my $f (keys %names_a) {
     if (! exists $names_b{$f}) {
