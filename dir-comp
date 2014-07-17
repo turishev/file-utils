@@ -514,7 +514,7 @@ sub sftp_run {
 
   $connect_butt->signal_connect (clicked =>
 				 sub {
-                                   $self->{sftp}->sftp_disconnect() if $self->{sftp};
+                                   sftp_disconnect($self->{sftp}) if $self->{sftp};
 
 				   $self->{sftp}  = sftp_connect ($host_entr->get_text,
 								  $port_entr->get_text,
@@ -566,6 +566,7 @@ sub set_handler {
 sub get {
   my $self = shift;
   my $path = ::envar (::pwd (::home (::rm_sp ($self->{entry}->get_text))));
+  $path =~ s/\/$//;
   set ($self, $path);
   return $path;
 }
@@ -808,7 +809,7 @@ sub sftp_check_path {
     }
     else {
       my $res = $sftp_a->mkdir($p);
-      return "error sftp mkdir '$p':$res" if not $res;
+      return "error sftp mkdir '$p':$res:" . $sftp_a->error if not $res;
     };
   };
 
@@ -826,11 +827,13 @@ sub move_or_copy {
       $err and return $err;
 
       $sftp_a->get ($path_a, $path_b, overwrite => 1)
-	or return "error get remote file '$path_a'\nto '$path_b'";
+	or return "error get remote file '$path_a'\nto '$path_b':"
+	  . $sftp_a->error;
 
       if ($move) {
 	$sftp_a->remove ($path_a)
-	  or return "error remove remote file '$path_a'";
+	  or return "error remove remote file '$path_a':"
+	    . $sftp_a->error;
       }
     }
     else  {#src=b
@@ -838,7 +841,8 @@ sub move_or_copy {
       $err and return $err;
 
       $sftp_a->put ($path_b, $path_a, overwrite => 1)
-	or return "error put file '$path_b' to remote '$path_a'";
+	or return "error put file '$path_b' to remote '$path_a':"
+	  . $sftp_a->error;
 
       unlink $path_b or return "error delete local '$path_b'" if $move;
     }
@@ -875,7 +879,7 @@ sub oper_del {
 
   if ($letter eq 'a' and $sftp_a) {
     $sftp_a->remove ($path)
-      or return "error remove remote file '$path'";
+      or return "error remove remote file '$path':" . $sftp_a->error;
   }
   else {
     unlink $path or return "error delete local '$path'"
@@ -923,10 +927,10 @@ sub operation_do {
     }
     elsif (! $row{a_cp} and ! $row{b_cp}) {
       if ($row{a_del}) {
-	&$check_err (oper_del ($row{name}), 'a');
+	&$check_err (oper_del ($row{name}, 'a'));
       }
       if ($row{b_del}) {
-	&$check_err (oper_del ($row{name}), 'b');
+	&$check_err (oper_del ($row{name}, 'b'));
       }
     }
     else {
@@ -1029,7 +1033,7 @@ sub create_local_path_list {
     find ({wanted => sub {
             return if /^\.\.?$/;
             my $path = decode ('utf8', $File::Find::name);
-            my ($dir, $p) = ($path =~ /($start_dir)(.+)/);
+            my ($dir, $p) = ($path =~ /($start_dir\/)(.+)/);
             my %attr = get_file_info ($path);
             $res->{$p} = {%attr} if $attr{type} eq 'file';
 	  }},
@@ -1060,7 +1064,7 @@ sub create_sftp_path_list {
 
   for my $f (@list) {
     my $n = $f->{filename};
-    my ($dir, $p) = ($n =~ /($start_dir)(.+)/);
+    my ($dir, $p) = ($n =~ /($start_dir\/)(.+)/);
     next if ! $p;
     # name(relative path) => attributes
     my $type = file_type_format ($f->{a}->perm);
@@ -1112,12 +1116,17 @@ sub start_compare {
   }
   Result_List::clear();
 
-  $start_dir_a ne $start_dir_b || return;
+  !$sftp_a and $start_dir_a ne $start_dir_b || return;
 
   my (%names_a, %names_b);
 
   create_path_list ($sftp_a, $start_dir_a, \%names_a);
   create_path_list (undef,   $start_dir_b, \%names_b);
+
+  print "LIST A:\n";
+  map {print encode ('utf-8',$_),"\n"} sort keys %names_a;
+  print "LIST B:\n";
+  map {print encode ('utf-8',$_),"\n"} sort keys %names_b;
 
   for my $f (keys %names_a) {
     if (! exists $names_b{$f}) {
