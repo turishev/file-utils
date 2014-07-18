@@ -206,16 +206,23 @@ my $editor      = 'leafpad';
 package Menu;
 use utf8;
 use Glib qw/TRUE FALSE/;
-use Data::Dumper;
 
 sub create {
   my $menu = Gtk2::Menu->new;
 
  # $menu->append (Gtk2::TearoffMenuItem->new);
-  my ($item, $name, $handler);
-  while ($name = shift) {
-    $handler = shift;
-    if ($name =~ /^-+$/) {
+
+  while (my $i = shift) {
+    my ($item, $name, $handler, $opt);
+    $name = $i->{caption};
+    $handler = $i->{handler} if exists $i->{handler};
+
+    if (exists $i->{opt}) {
+      $opt = $i->{opt}
+    }
+    else {$opt = 0};
+
+    if ($name eq '---') {
       $item = Gtk2::SeparatorMenuItem->new ();
     }
     else {
@@ -223,6 +230,8 @@ sub create {
       $item->signal_connect ('activate' => $handler);
       $item->set_property ('name', $name);
     }
+
+    $item->set_property ('user-data', $opt);
     $menu->append ($item);
   }
   $menu->signal_connect ('hide' => \&Menu::hide);
@@ -231,20 +240,17 @@ sub create {
 }
 
 sub show {
-  my ($menu, $dtype) = @_;
+  my ($menu, $check_callback) = @_;
   my @list = $menu->get_children;
 
-  if ($dtype eq 'A' or $dtype eq 'B') {
-    $dtype = ($dtype eq 'A' ? 'B' : 'A');
-    my $rx = qr/\s$dtype/;
+  for my $i (@list) {
+    my $ud = $i->get_property ('user-data');
+    next if not $ud;
 
-    for my $i (@list) {
-      if ($i->get_property ('name') =~ $rx) {
-    	$i->set_sensitive (FALSE);
-      }
+    if (! &$check_callback ($ud)) {
+      $i->set_sensitive (FALSE);
     }
   }
-
   $menu->popup (undef, undef, undef, undef, 0, 0);
 }
 
@@ -691,17 +697,35 @@ sub create_window {
 
   $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
 
-  my $menu = Menu::create ('Open A', sub {open_handler('a')},
-			   'Open B', sub {open_handler('b')},
-                           '---', 0,
-			   'Open A with ..', sub {open_with_dlg ('a')},
-			   'Open B with ..', sub {open_with_dlg ('b')},
-			   '---', 0,
-			   'Copy A to clipboard', sub {clipboard_copy('a')},
-			   'Copy B to clipboard', sub {clipboard_copy('b')},
-			   '---', 0,
-			   'diff A and B', \&diff_files,
-			   'comp A and B content ', \&comp_content);
+  # bit flags for control  menu item show
+  # 1- need A, 2 - need B, 4 - local (not sftp) files
+  my $menu = Menu::create ({caption=> 'Open A',
+                            handler => sub {open_handler('a')},
+                            opt => 1},
+			   {caption=> 'Open B',
+                            handler => sub {open_handler('b')},
+                            opt => 2},
+                           {caption=>'---'},
+			   {caption=>'Open A with ..',
+			    handler => sub {open_with_dlg ('a')},
+			    opt => 1},
+			   {caption=>'Open B with ..',
+			    handler => sub {open_with_dlg ('b')},
+			    opt => 2},
+			   {caption=>'---'},
+			   {caption=>'Copy A to clipboard',
+			    handler => sub {clipboard_copy('a')},
+                            opt => 1 | 4},
+			   {caption=>'Copy B to clipboard',
+			    handler => sub {clipboard_copy('b')},
+                            opt => 2},
+			   {caption=>'---'},
+			   {caption=>'diff A and B',
+			    handler => \&diff_files,
+			    opt => 1 | 2},
+			   {caption=>'comp A and B content ',
+			    handler => \&comp_content,
+			    opt => 1 | 2});
 
   #EventBox нужен для корректного позиционировани контекстного меню
   my $eventbox = Gtk2::EventBox->new();
@@ -1178,7 +1202,18 @@ sub menu_popup {
   my @sel = Result_List::selected_inx();
 
   if ($#sel == 0 and $event->button == 3) {# только для одной строчки
-    Menu::show ($menu, Result_List::diff_type ($sel[0]));
+
+    my $dtype = Result_List::diff_type ($sel[0]);
+
+    my $patt = 0;
+    $patt = 4 if not $sftp_a;
+    if ($dtype eq 'A')    {$patt |= 1}
+    elsif ($dtype eq 'B') {$patt |= 2}
+    else                  {$patt |= 3};
+
+    my $check = sub {my $opt = shift; print "opt:$opt,patt:$patt\n"; return ($patt & $opt) == $opt;
+		   };
+    Menu::show ($menu, $check);
   }
 }
 
