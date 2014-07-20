@@ -51,10 +51,14 @@ my $editor      = 'leafpad';
     $clm->set_sort_column_id($i);
 
     $clm->signal_connect('clicked', Result_List::click_column_hnd);
+
     my $r = $clm->get_cell_renderers;
+
+
     $r->set('xalign', $clmns[$i]{align});
     if ($clmns[$i]{type} eq 'bool') {
       $r->signal_connect ('toggled' => Result_List::check_box_hnd);
+      $clm->set_cell_data_func ($r, \&bool_randr_func);
     }
   }
 
@@ -74,6 +78,22 @@ my $editor      = 'leafpad';
 			    # not propogate event in list
 			  }
 			  else {FALSE};});
+  # on any cell rendering
+ sub bool_randr_func {
+    my ($column, $renderer, $model, $iter) = @_;
+    my $col = $renderer->{column_index};
+    my $id = $clmns[$col]{id};
+    my $dtype  = ($model->get ($iter))[$clm{diff}];
+
+    if ($dtype eq 'A' and ($id eq 'b_del' or $id eq 'b_cp')
+        or $dtype eq 'B' and ($id eq 'a_del' or $id eq 'a_cp')) {
+      $renderer->set('visible' , FALSE);
+    }
+    else {
+      #$renderer->set('inconsistent' , TRUE);
+      $renderer->set('visible' , TRUE);
+    }
+  }
 
   sub sort_int {
     my $col_num = pop;
@@ -93,23 +113,11 @@ my $editor      = 'leafpad';
 
     my $model = $list->get_model;
 
-    if (($col == $clm{a_cp} or $col == $clm{a_del})
-	and $list->{data}->[$row]->[$clm{diff}] eq 'B') {
-      $list->{data}->[$row]->[$clm{a_cp}] = 0;
-      $list->{data}->[$row]->[$clm{a_del}] = 0;
-      return;
-    }
-    if (($col == $clm{b_cp} or $col == $clm{b_del})
-	and $list->{data}->[$row]->[$clm{diff}] eq 'A') {
-      $list->{data}->[$row]->[$clm{b_cp}] = 0;
-      $list->{data}->[$row]->[$clm{b_del}] = 0;
-      return;
-    }
-
     my @sel = selected_inx();
 
     if ($#sel > 0 and  $row >= $sel[0] and $row <= $sel[$#sel]) {
       for my $i (@sel) {
+print $list->{data}->[$i]->[0], "\n";
 	if ($i != $row) {
 	  $list->{data}->[$i]->[$col] = ! ($list->{data}->[$i]->[$col]);
 	}
@@ -943,6 +951,13 @@ sub operation_do {
   };
 
   for (my $i = 0; $i < Result_List::row_count(); $i++) {
+    my %row = Result_List::row ($i);
+    print "$row{a_cp},$row{a_del},$row{b_cp},$row{b_del}",
+      encode ('utf-8', $row{name}),"\n";
+  }
+  return;
+
+  for (my $i = 0; $i < Result_List::row_count(); $i++) {
     last if $too_many_err;
 
     my %row = Result_List::row ($i);
@@ -1211,8 +1226,7 @@ sub menu_popup {
     elsif ($dtype eq 'B') {$patt |= 2}
     else                  {$patt |= 3};
 
-    my $check = sub {my $opt = shift; print "opt:$opt,patt:$patt\n"; return ($patt & $opt) == $opt;
-		   };
+    my $check = sub {my $opt = shift; return ($patt & $opt) == $opt;};
     Menu::show ($menu, $check);
   }
 }
