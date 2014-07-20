@@ -41,8 +41,10 @@ my $editor      = 'leafpad';
 
   my $list;
   my $scroll;
+  my @save_selection;
 
   $list = Gtk2::SimpleList->new (map {($_->{caption}, $_->{type})} @clmns);
+  #$list->signal_connect('' => \&Result_List::list_click_hnd);
 
   for (my $i = 0; $i <= $#clmns; $i++) {
     my $clm = $list -> get_column ($i);
@@ -63,6 +65,7 @@ my $editor      = 'leafpad';
   }
 
   $list->get_selection->set_mode ('multiple');
+  $list->get_selection->signal_connect ('changed' =>\&Result_List::sel_change_hnd);
   $list->get_model->set_sort_func (8, \&Result_List::sort_int, 8);# sort size A
   $list->get_model->set_sort_func (9, \&Result_List::sort_int, 9);# sort size B
 
@@ -78,6 +81,14 @@ my $editor      = 'leafpad';
 			    # not propogate event in list
 			  }
 			  else {FALSE};});
+
+ # restore selection after check box clicked 
+ sub sel_change_hnd {
+   #my $selection = shift;
+   $list->select (@save_selection);
+   @save_selection = ();
+ }
+
   # on any cell rendering
  sub bool_randr_func {
     my ($column, $renderer, $model, $iter) = @_;
@@ -112,11 +123,13 @@ my $editor      = 'leafpad';
     my $col = $renderer->{column_index};
     my $model = $list->get_model;
     #print "check_box_hnd:$row,$col\n";
-    my @sel = selected_inx();
 
-    if ($#sel > 0 and  $row >= $sel[0] and $row <= $sel[$#sel]) {
-      for my $i (@sel) {
+    @save_selection = selected_inx();#save to restore
 
+    if ($#save_selection > 0
+	and $row >= $save_selection[0]
+	and $row <= $save_selection[$#save_selection]) {
+      for my $i (@save_selection) {
         my $dtype = $list->{data}->[$i]->[$clm{diff}];
 	#print $list->{data}->[$i]->[0], "$dtype\n";
 
