@@ -110,16 +110,23 @@ my $editor      = 'leafpad';
   sub check_box_hnd {
     my ($renderer, $row) = @_;
     my $col = $renderer->{column_index};
-
     my $model = $list->get_model;
-
+    #print "check_box_hnd:$row,$col\n";
     my @sel = selected_inx();
 
     if ($#sel > 0 and  $row >= $sel[0] and $row <= $sel[$#sel]) {
       for my $i (@sel) {
-print $list->{data}->[$i]->[0], "\n";
-	if ($i != $row) {
+
+        my $dtype = $list->{data}->[$i]->[$clm{diff}];
+	#print $list->{data}->[$i]->[0], "$dtype\n";
+
+	if (($dtype ne 'B' or $col != $clm{a_cp} and $col != $clm{a_del})
+	    and
+	    ($dtype ne 'A' or $col != $clm{b_cp} and $col != $clm{b_del})
+	    and $i != $row) {
 	  $list->{data}->[$i]->[$col] = ! ($list->{data}->[$i]->[$col]);
+	  # инвертируем selected ТОЛЬКО ЕСЛИ ВИДИМЫ checkbox и не тот,
+	  # по которому был щелчок
 	}
       }
     }
@@ -950,12 +957,12 @@ sub operation_do {
     }
   };
 
-  for (my $i = 0; $i < Result_List::row_count(); $i++) {
-    my %row = Result_List::row ($i);
-    print "$row{a_cp},$row{a_del},$row{b_cp},$row{b_del}",
-      encode ('utf-8', $row{name}),"\n";
-  }
-  return;
+  # for (my $i = 0; $i < Result_List::row_count(); $i++) {
+  #   my %row = Result_List::row ($i);
+  #   print "$row{a_cp},$row{a_del},$row{b_cp},$row{b_del}  ",
+  #     encode ('utf-8', $row{name}),"\n";
+  # }
+  # return;
 
   for (my $i = 0; $i < Result_List::row_count(); $i++) {
     last if $too_many_err;
