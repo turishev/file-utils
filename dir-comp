@@ -313,22 +313,21 @@ sub new {
   my $lb = Gtk2::Label->new ($self->{label});
   $hbox->pack_start ($lb, FALSE, TRUE, 0);
 
-  my $butt = Gtk2::Button->new ('dir');
-  $butt->set_size_request(50);
+  my $hb  = Gtk2::HBox->new();
+  if (exists $opt {butt_size}) {
+    $hb->set_size_request ($opt {butt_size});
+  }
+  else {$hb->set_size_request (120)}
 
-  $hbox->pack_start ($butt, FALSE, TRUE, 0);
+  $hbox -> pack_start ($hb, FALSE, FALSE, 0);
+
+  my $butt = Gtk2::Button->new (' DIR');
+  $hb->pack_start ($butt, TRUE, TRUE, 0);
   $butt->signal_connect (clicked => \&Dir_Box::file_dialog_run, $self);
 
-  my $butt = Gtk2::Button->new ('SFTP');
-  $butt->set_size_request(50);
-  $hbox->pack_start ($butt, FALSE, TRUE, 0);
-
-  if (exists $opt {sftp_disable} and $opt {sftp_disable}) {
-    $butt->set_sensitive (0);
-    $butt->set_label ('');
-    #$butt->hide();
-  }
-  else {
+  if (not exists $opt {sftp_disable} or not $opt {sftp_disable}) {
+    my $butt = Gtk2::Button->new ('SFTP');
+    $hb->pack_start ($butt, TRUE, TRUE, 0);
     $butt->signal_connect (clicked => \&Dir_Box::sftp_run, $self);
   }
 
@@ -658,7 +657,7 @@ use File::Compare;
 use strict;
 
 my ($start_dir_a, $start_dir_b, $sftp_a);
-my ($icon_data, $lang, %local_text);
+my ($icon_data, $lang, %local_text, %help_text);
 
 my $dir_box_a;
 my $dir_box_b;
@@ -708,10 +707,6 @@ sub create_window {
   my $hbox = Gtk2::HBox->new(TRUE);
   my $butt;
 
-  $butt = Gtk2::Button->new (text ('Compare'));
-  $butt->signal_connect (clicked => \&start_compare, $window);
-  $hbox->pack_start ($butt, TRUE, TRUE, 0);
-
   $chk_size = Gtk2::CheckButton->new (text ('size'));
   $chk_size->set_active (TRUE);
   $hbox -> pack_start ($chk_size, FALSE, FALSE, 0);
@@ -743,6 +738,13 @@ sub create_window {
 			   {caption=>'Open B with ..',
 			    handler => sub {open_with_dlg ('b')},
 			    opt => 2},
+                           {caption=>'---'},
+			   {caption=>'Copy A to ..',
+			    handler => sub {copy_to_dlg ('a')},
+			    opt => 1},
+			   {caption=>'Copy B to ..',
+			    handler => sub {copy_to_dlg ('b')},
+			    opt => 2},
 			   {caption=>'---'},
 			   {caption=>'Copy A to clipboard',
 			    handler => sub {clipboard_copy('a')},
@@ -772,8 +774,16 @@ sub create_window {
   # кнопки управления
   $hbox = Gtk2::HBox->new(TRUE);
 
-  $butt = Gtk2::Button->new (text ('Execute operations'));
+  $butt = Gtk2::Button->new (text ('Compare'));
+  $butt->signal_connect (clicked => \&start_compare, $window);
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+
+  $butt = Gtk2::Button->new (text ('Execute'));
   $butt->signal_connect (clicked => \&operation_do, $window);
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+
+  $butt = Gtk2::Button->new (text ('Help'));
+  $butt->signal_connect (clicked => \&show_help, $window);
   $hbox->pack_start ($butt, TRUE, TRUE, 0);
 
   $butt =  Gtk2::Button->new (text ('Exit'));
@@ -1054,12 +1064,12 @@ sub open_handler {
 sub open_with_dlg {
   my $letter = shift;
 
-  my $dialog = Gtk2::Dialog->new (text ("Open with"),
+  my $dialog = Gtk2::Dialog->new (uc ($letter) . ": ". text ("open with"),
 				  $main_window,
 				  ['modal', 'destroy-with-parent'],
 				  'gtk-cancel' => 'cancel',
 				  'gtk-ok'     => 'ok');
-  $dialog->set_title (text ('Open ') . $letter . text (' with ..'));
+  #$dialog->set_title (text ('Open ') . $letter . text (' with ..'));
 
   my $entr = Gtk2::Entry->new;
   $entr->set_width_chars (20);
@@ -1073,6 +1083,27 @@ sub open_with_dlg {
   #print "cmd:@cmd\n";
   $dialog->destroy;
   open_with ($letter, @cmd) if $response eq 'ok';
+}
+
+sub copy_to_dlg {
+  my $letter = shift;
+  my $dialog = Gtk2::Dialog->new (uc ($letter) . ": " . text ("copy to .."),
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-cancel' => 'cancel',
+				  'gtk-ok'     => 'ok');
+  my $dirbox = Dir_Box->new (label=> '', sftp_disable => 1, butt_size => 50);
+  $dialog->vbox->add ($dirbox->box);
+
+  $dialog->set_default_response ('cancel');
+  $dialog->show_all;
+  my $response = $dialog->run;
+
+  $dialog->destroy;
+
+  if ($response eq 'ok') {
+
+  }
 }
 
 sub diff_files {
@@ -1481,6 +1512,40 @@ sub envar {
   return $str;
 }
 
+sub show_help {
+  my $dialog = Gtk2::Dialog->new (text ('Help'),
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-ok'     => 'ok');
+
+  $dialog->set_size_request (640, 480);
+  my $textview = Gtk2::TextView->new();
+  my $scroll = Gtk2::ScrolledWindow->new;
+  $scroll->set_policy ('automatic', 'automatic');
+  $scroll->add ($textview);
+
+  $textview->set_editable (FALSE);
+  $textview->set_wrap_mode ('word');
+
+  my $buffer = $textview->get_buffer();
+  my $head_tag = $buffer->create_tag ('head',
+				      'foreground' => '#006600',
+				      'weight'     => 900);
+  my $start = $buffer->get_start_iter();
+  my $end;
+
+  for my $i (@{$help_text{$lang}}) {
+    $buffer->insert_with_tags ($start, $i->{title} . "\n\n", $head_tag);
+    $buffer->insert ($start, $i->{text} . "\n\n");
+  }
+
+  $dialog->vbox->add ($scroll);
+  $dialog->show_all;
+  my $response = $dialog->run;
+  $dialog->destroy;
+}
+
+
 END {
   $dir_box_a->sftp_disconnect if $dir_box_a;
   for my $f (@tmp_files) {
@@ -1529,7 +1594,7 @@ END_ICON
                  'Copy B to clipboard'   => {ru => 'Копировать B в буфер'},
                  'diff A and B'          => {ru => 'diff A и B'},
 		 'comp A and B content ' => {ru => 'Сравнить содержимое A и B'},
-                 'Execute operations'    => {ru => 'Выполнить операции'},
+                 'Execute'               => {ru => 'Выполнить'},
                  'Exit'                  => {ru => 'Выход'},
                  'Execute all operation?'=> {ru => 'Выполнить все операции?'},
                  'Operation ignored'     => {ru => 'Игнорированы операции'},
@@ -1540,6 +1605,45 @@ END_ICON
                  'delete error'          => {ru => 'Ошибки удаления'},
 		 'show all'              => {ru => 'показать все'},
 		);
+
+
+  %help_text = (en => [
+		       {title => '',
+			text  =>
+""
+		       }
+
+		      ],
+		ru => [
+		       {title =>'Общие сведения',
+			text  =>
+"Программа выполняет сравнение двух директорий по составу файлов и их параметрам 
+и дальнейшую их синхронизацию с полным контролем.
+Одна из директорий может быть удалённой и доступной по протоколу SFTP.
+"
+
+		       },
+
+		       {title => 'Сравнение директорий',
+			text  =>
+"В результирующем списке сравнения показываются только обычные файлы, директории и специальные файлы
+ (файлы устройств, сокеты, пайпы) не показываются."
+. "Опции сравнения:\n"
+		       },
+
+		       {title => 'Синхронизация',
+			text  =>
+""
+		      },
+		       {title => 'Удалённые сравнения и синхронизация (SFTP)',
+			text  =>
+""
+		       },
+		       {title => 'Контекстное меню',
+			text  =>
+""
+		       },
+		      ]);
 
   $lang = get_lang();
 }
