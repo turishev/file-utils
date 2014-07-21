@@ -18,7 +18,6 @@ use MIME::Base64 qw(decode_base64);
 use strict;
 no warnings "experimental::smartmatch";
 
-
 my $file_manager="thunar";
 my $editor="leafpad";
 my $open_helper = 'exo-open';
@@ -29,6 +28,9 @@ my %default = (name                => '',
 	       name_case_sensitive => 0,
                directory => $ENV{PWD},
                text_case_sensitive => 0);
+
+our $VERSION = '1.00';
+
 
 ##### global var ######################################################
 my $icon_data;
@@ -205,6 +207,7 @@ init_controls ();
 Gtk2->main;
 
 0;
+#############################################################################
 
 ## localization #############################################################
 sub get_lang {
@@ -1636,6 +1639,11 @@ package main;
 
 
 BEGIN {
+  if ($ARGV[0] eq '-v' or $ARGV[0] eq '--version') {
+    print "$main_title $VERSION\n";
+    exit;
+  }
+
   $icon_data =<<END_ICON;
 iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBI
 WXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH3gQZCi4O3VnI1wAAAB1pVFh0Q29tbWVudAAAAAAAQ3Jl
