@@ -9,6 +9,9 @@ my $main_title  = 'dir-comp';
 my $open_helper = 'exo-open';
 my $editor      = 'leafpad';
 
+our $VERSION='1.00';
+
+show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 
 #######################################################################
 {
@@ -1359,6 +1362,12 @@ sub rdev_format {
                  ($_[0] >> 8) & 0xff,
                   $_[0] & 0xff;
 }
+
+sub show_version {
+  print "$main_title $VERSION\n";
+  exit;
+}
+
 ## localization #############################################################
 sub text {
   my $key = shift;
@@ -1473,7 +1482,7 @@ sub envar {
 }
 
 END {
-  $dir_box_a->sftp_disconnect;
+  $dir_box_a->sftp_disconnect if $dir_box_a;
   for my $f (@tmp_files) {
     print STDERR "cleanup tmp:$f->{file}\n";
     unlink $f->{file};
