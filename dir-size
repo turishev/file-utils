@@ -19,9 +19,17 @@ use MIME::Base64 qw(decode_base64);
 use Carp;
 use strict;
 
-my $file_manager="thunar";
-my $open_helper='exo-open';
-my $main_title = 'dir-size';
+my $file_manager = 'thunar';
+my $open_helper  = 'exo-open';
+my $main_title   = 'dir-size';
+
+our $VERSION = '1.00';
+
+my %opt;
+getopts ('d:v', \%opt);
+if ($opt{v}) {
+  show_version ();
+}
 
 ############################################################################
 my $base_dir;
@@ -41,20 +49,23 @@ my $info_label;
 my $sel_label;
 my $calc_dir = 0;
 
-Getopt::Std::getopts('d:');
-
-if ($Getopt::Std::opt_d) {
-  $base_dir = decode ('utf8', $Getopt::Std::opt_d);
+if ($opt{d}) {
+  $base_dir = decode ('utf8', $opt{d});
   $calc_dir = 1;
 }
 else {
   $base_dir = decode ('utf8', $ENV{PWD});
 }
-create_window();
+create_window ();
 Gtk2->main;
 
 0;
 ############################################################################
+sub show_version {
+  print "$main_title $VERSION\n";
+  exit;
+}
+
 sub create_window {
   my $icon_pixbuf;
 
@@ -540,6 +551,8 @@ sub list_click_handler {
   # }
   return FALSE;
 }
+
+
 #############################################################################
 # Clipboard
 sub clipboard_copy {
@@ -629,7 +642,6 @@ sub create {
   return $menu;
 }
 # END Menu ###########################################################
-
 package main;
 BEGIN {
   $icon_data =<<END_ICON;
