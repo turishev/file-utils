@@ -562,7 +562,8 @@ sub sftp_run {
 			   if ($self->{sftp}) {
 			     my $tree_box;
 			     ($tree_box, $tree) = sftp_browser_create ($self->{sftp});
-			     $table->attach_defaults ($tree_box, 0, 5, 3, 4);
+			     #$table->attach_defaults ($tree_box, 0, 5, 3, 4);
+                             $mainbox->pack_start ($tree_box, TRUE, TRUE, 0);
 			   }
 			   else {::show_msg ('error', ::text ('not connected'))}
 			 });
@@ -583,9 +584,6 @@ sub sftp_run {
     $pass_entr->set_text ('sss');
     $port_entr->set_text ('22');
   }
-
-
-
 
   $dialog->show_all;
 
@@ -874,7 +872,7 @@ sub check_path {
 
   if (! -d $d) {
     my $dirs = eval {mkpath ($d)};
-    return "create dir '$d' error $@\n" unless $dirs;
+    return "create dir '$d' error " . decode ('utf-8', $@) . "\n" unless $dirs;
   }
   return undef;
 }
@@ -893,7 +891,8 @@ sub sftp_check_path {
     }
     else {
       my $res = $sftp_a->mkdir($p);
-      return "error sftp mkdir '$p':$res:" . $sftp_a->error if not $res;
+      return "error sftp mkdir '$p':$res:"
+	. decode ('utf-8', $sftp_a->error) if not $res;
     };
   };
 
@@ -912,12 +911,12 @@ sub move_or_copy {
 
       $sftp_a->get ($path_a, $path_b, overwrite => 1)
 	or return "error get remote file '$path_a'\nto '$path_b':"
-	  . $sftp_a->error;
+	  . decode ('utf-8', $sftp_a->error);
 
       if ($move) {
 	$sftp_a->remove ($path_a)
 	  or return "error remove remote file '$path_a':"
-	    . $sftp_a->error;
+	    . decode ('utf-8', $sftp_a->error);
       }
     }
     else  {#src=b
@@ -926,7 +925,7 @@ sub move_or_copy {
 
       $sftp_a->put ($path_b, $path_a, overwrite => 1)
 	or return "error put file '$path_b' to remote '$path_a':"
-	  . $sftp_a->error;
+	  . decode ('utf-8', $sftp_a->error);
 
       unlink $path_b or return "error delete local '$path_b'" if $move;
     }
@@ -963,7 +962,8 @@ sub oper_del {
 
   if ($letter eq 'a' and $sftp_a) {
     $sftp_a->remove ($path)
-      or return "error remove remote file '$path':" . $sftp_a->error;
+      or return "error remove remote file '$path':" 
+	. decode ('utf-8', $sftp_a->error);
   }
   else {
     unlink $path or return "error delete local '$path'"
@@ -1103,11 +1103,30 @@ sub copy_to_dlg {
   $dialog->set_default_response ('cancel');
   $dialog->show_all;
   my $response = $dialog->run;
-
+  my $name = Result_List::selected_name();
+  my $dst = $dirbox->get() . '/' . basename ($name);
   $dialog->destroy;
 
   if ($response eq 'ok') {
+    my $src = ($letter eq 'a'? $start_dir_a: $start_dir_b)
+                . '/'. $name;
+    print "copy to:$src->$dst\n";
 
+    if ($sftp_a and $letter eq 'a') {#copy from sftp to local
+      my $err = check_path ($dst);
+      if ($err) {
+	show_msg ('error', $err);
+      }
+      else {
+	$sftp_a->get ($src, $dst, overwrite => 1)
+	  or show_msg ('error',
+		       "error get remote file '$src'\nto '$dst':"
+		       . decode ('utf-8', $sftp_a->error));
+      }
+    }
+    else {#local copy
+      copy ($src, $dst) or show_msg ('error', "copy error:'$src'\nto '$dst'");
+    }
   }
 }
 
