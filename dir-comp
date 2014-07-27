@@ -644,7 +644,6 @@ sub focus {
 }
 # END Dir_Box ########################################################
 
-##  main #############################################################
 package main;
 use Encode;
 use Glib qw /TRUE FALSE/;
@@ -668,7 +667,11 @@ my $chk_date;
 my $chk_content;
 my $chk_size;
 my $chk_show_all;
+my $progress_bar;
 my $main_window = create_window ();
+
+my $break_oper = 0;
+
 init_controls ();
 
 my @tmp_files;
@@ -774,6 +777,10 @@ sub create_window {
   $eventbox->add (Result_List::box());
 
   $mainbox->pack_start ($eventbox, TRUE, TRUE, 0);
+
+  $progress_bar =Gtk2::ProgressBar->new;
+  $mainbox->pack_start ($progress_bar, FALSE, FALSE, 0);
+
   # кнопки управления
   $hbox = Gtk2::HBox->new(TRUE);
 
@@ -864,6 +871,24 @@ sub show_text {
   my $response = $dialog->run;
   $dialog->destroy;
 }
+
+sub progress_start {
+  my ($files_num, $text) = @_;
+  $progress_bar->set_text ($text);
+  $progress_bar->set_fraction (0);
+  $progress_bar->set_pulse_step (0.01);
+}
+
+sub progress_next {
+  #$progress_bar->set_text ('progress');
+  $progress_bar->pulse;
+}
+
+sub progress_end {
+  $progress_bar->set_text ('');
+  $progress_bar->set_fraction (0);
+}
+
 
 ##############################################################################
 # обработчики
@@ -1027,6 +1052,8 @@ sub operation_do {
     else {
       $err .= " oper code error for \n$a \n$b\n"
     }
+    while (Glib::MainContext->default->pending)
+      { Glib::MainContext->default->iteration(FALSE) };
   }
 
   if ($err) {
@@ -1158,19 +1185,28 @@ sub diff_files {
   show_text ($out, "diff:$row{name}");
 }
 
+sub gui_upd {
+  progress_next ();
+  while (Glib::MainContext->default->pending)
+    {Glib::MainContext->default->iteration (FALSE)};
+}
+
 sub create_local_path_list {
   my ($start_dir, $res) = @_;
   eval {
+    my $cnt = 0;
     find ({wanted => sub {
+            die if $break_oper;
             return if /^\.\.?$/;
             my $path = decode ('utf8', $File::Find::name);
             my ($dir, $p) = ($path =~ /($start_dir\/)(.+)/);
             my %attr = get_file_info ($path);
             $res->{$p} = {%attr} if $attr{type} eq 'file';
+            gui_upd (), $cnt = 0 if $cnt++ >= 20;
 	  }},
 	  encode ('utf8', $start_dir));
   };
-  if ($@) {
+  if ($@ and ! $break_oper) {
     show_msg ('error', "Find file error: $@\n$start_dir");
   }
 }
@@ -1251,8 +1287,10 @@ sub start_compare {
 
   !$sftp_a and $start_dir_a ne $start_dir_b || return;
 
-  my (%names_a, %names_b);
+  progress_start (0, text ('compare files'));
+  $break_oper = 0;
 
+  my (%names_a, %names_b);
   create_path_list ($sftp_a, $start_dir_a, \%names_a);
   create_path_list (undef,   $start_dir_b, \%names_b);
 
@@ -1275,18 +1313,22 @@ sub start_compare {
 
       Result_List::add ($f, $names_a{$f}, $names_b{$f}, $diff) if $diff;
     }
+    progress_next ();
   }
 
   for my $f (keys %names_b) {
     if (! exists $names_a{$f}) {
       Result_List::add ($f, '', $names_b{$f}, 'B');
     }
+    progress_next ();
   }
-
+  progress_end ();
   Result_List::row_count == 0 and show_msg ('info', text ('No differences were found'));
 }
 
 sub on_exit {
+  $break_oper = 1;
+  gui_upd ();
   Gtk2->main_quit;
 }
 
