@@ -672,6 +672,7 @@ my $main_window = create_window ();
 
 my $break_oper = 0;
 
+
 init_controls ();
 
 my @tmp_files;
@@ -785,7 +786,7 @@ sub create_window {
   $hbox = Gtk2::HBox->new(TRUE);
 
   $butt = Gtk2::Button->new (text ('Compare'));
-  $butt->signal_connect (clicked => \&start_compare, $window);
+  $butt->signal_connect (clicked => \&start_stop_compare, $window);
   $hbox->pack_start ($butt, TRUE, TRUE, 0);
 
   $butt = Gtk2::Button->new (text ('Execute'));
@@ -820,6 +821,27 @@ sub init_controls {
  $dir_box_b ->set('/home/prog/tmp');
 
   $dir_box_a->focus;
+}
+
+{
+  my $started = 0;
+
+  sub start_stop_compare {
+    my $butt = shift;
+
+    if ($started) {
+      $butt->set_label (text ('Compare'));
+      $started = 0;
+      $break_oper = 1;
+    } else {
+      $butt->set_label (text ('Abort'));
+      $started = 1;
+      $break_oper = 0;
+      start_compare ();
+      $started = 0;
+      $butt->set_label (text ('Compare'));
+    }
+  }
 }
 
 sub show_msg {
@@ -1228,22 +1250,30 @@ sub sftp_tmp_copy {
 
 sub create_sftp_path_list {
   my ($sftp, $start_dir, $res) = @_;
+  eval {
+    $sftp->find ($start_dir,
+		 wanted =>
+		 sub {
+                   die if $break_oper;
+		   my $f = $_[1];
+		   my $n = $f->{filename};
+		   my ($dir, $p) = ($n =~ /($start_dir\/)(.+)/);
+		   return if ! $p;
+		   # name(relative path) => attributes
+		   my $type = file_type_format ($f->{a}->perm);
+		   $res->{$p} = {type  => $type,
+				 size  => num_format ($f->{a}->size),
+				 ctime => '',
+				 mtime => time_format ($f->{a}->mtime),
+				 perm  => perm_format ($f->{a}->perm),
+				 owner => $f->{a}->uid . ':' . $f->{a}->gid,
+				 other => ''} if $type eq 'file';
 
-  my @list = $sftp->find ($start_dir);
-
-  for my $f (@list) {
-    my $n = $f->{filename};
-    my ($dir, $p) = ($n =~ /($start_dir\/)(.+)/);
-    next if ! $p;
-    # name(relative path) => attributes
-    my $type = file_type_format ($f->{a}->perm);
-    $res->{$p} = {type  => $type,
-		  size  => num_format ($f->{a}->size),
-		  ctime => '',
-		  mtime => time_format ($f->{a}->mtime),
-		  perm  => perm_format ($f->{a}->perm),
-		  owner => $f->{a}->uid . ':' . $f->{a}->gid,
-		  other => ''} if $type eq 'file';
+		   gui_upd();
+		 });
+  };
+  if ($@ and ! $break_oper) {
+    show_msg ('error', "Find remote files error: $@\n$start_dir");
   }
 }
 
@@ -1287,13 +1317,12 @@ sub start_compare {
 
   !$sftp_a and $start_dir_a ne $start_dir_b || return;
 
-  progress_start (0, text ('compare files'));
-  $break_oper = 0;
-
   my (%names_a, %names_b);
+  progress_start (0, text ('get A file-list'));
   create_path_list ($sftp_a, $start_dir_a, \%names_a);
+  progress_start (0, text ('get B file-list'));
   create_path_list (undef,   $start_dir_b, \%names_b);
-
+  progress_start (0, text ('compare files'));
   # print "LIST A:\n";
   # map {print encode ('utf-8',$_),"\n"} sort keys %names_a;
   # print "LIST B:\n";
@@ -1324,11 +1353,13 @@ sub start_compare {
   }
   progress_end ();
   Result_List::row_count == 0 and show_msg ('info', text ('No differences were found'));
+
+  Result_List::clear if $break_oper;
 }
 
 sub on_exit {
   $break_oper = 1;
-  gui_upd ();
+  #gui_upd ();
   Gtk2->main_quit;
 }
 
@@ -1670,7 +1701,8 @@ END_ICON
 		 'move error'            => {ru => 'Ошибки перемещения'},
                  'delete error'          => {ru => 'Ошибки удаления'},
 		 'show all'              => {ru => 'показать все'},
-                 'Help'                  => {ru => 'Справка'}
+                 'Help'                  => {ru => 'Справка'},
+                 'Abort'                 => {ru => 'Прервать'}
 		);
 
 
