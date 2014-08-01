@@ -38,7 +38,7 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 	       {id=>'owner_b', caption=>::text ('own B'), type=>'text', align=> 0});
 
   my %clm; # index columns numbers on id
-  for (my $i=0; $i <= $#clmns; $i++) {
+  for (my $i = 0; $i <= $#clmns; $i++) {
     $clm{$clmns[$i]{id}} = $i;
   }
 
@@ -183,6 +183,19 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     $data[$clm{b_cp}]    = FALSE;
 
     push @{$list->{data}}, [@data];
+  }
+
+  sub get_oper_inx_list {
+    my $result = shift;
+    my $l = $list->{data};
+    my $c = row_count();
+
+    for (my $i = 0; $i < $c; $i++) {
+      push @$result, $i if $l->[$i]->[$clm{a_del}]
+      	or $l->[$i]->[$clm{b_del}]
+      	  or $l->[$i]->[$clm{a_cp}]
+      	    or $l->[$i]->[$clm{b_cp}];
+    }
   }
 
   sub selected_inx_0 {
@@ -785,13 +798,14 @@ sub create_window {
   # кнопки управления
   $hbox = Gtk2::HBox->new(TRUE);
 
-  $butt = Gtk2::Button->new (text ('Compare'));
-  $butt->signal_connect (clicked => \&start_stop_compare, $window);
-  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+  my $comp_butt = Gtk2::Button->new (text ('Compare'));
+  $hbox->pack_start ($comp_butt, TRUE, TRUE, 0);
+  my $exe_butt = Gtk2::Button->new (text ('Execute'));
+  $hbox->pack_start ($exe_butt, TRUE, TRUE, 0);
 
-  $butt = Gtk2::Button->new (text ('Execute'));
-  $butt->signal_connect (clicked => \&operation_do, $window);
-  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+  $exe_butt->signal_connect (clicked => \&start_stop_oper, $comp_butt);
+  $comp_butt->signal_connect (clicked => \&start_stop_compare, $exe_butt);
+
 
   $butt = Gtk2::Button->new (text ('Help'));
   $butt->signal_connect (clicked => \&show_help, $window);
@@ -827,22 +841,52 @@ sub init_controls {
   my $started = 0;
 
   sub start_stop_compare {
-    my $butt = shift;
+    my ($butt, $another_butt) = @_;
 
     if ($started) {
       $butt->set_label (text ('Compare'));
       $started = 0;
       $break_oper = 1;
+      $another_butt->set_sensitive (TRUE);
     } else {
       $butt->set_label (text ('Abort'));
+      $another_butt->set_sensitive (FALSE);
       $started = 1;
       $break_oper = 0;
       start_compare ();
       $started = 0;
       $butt->set_label (text ('Compare'));
+      $another_butt->set_sensitive (TRUE);
+    }
+  }
+
+  sub start_stop_oper {
+    my ($butt, $another_butt) = @_;
+
+    if ($started) {
+      $butt->set_label (text ('Execute'));
+      $started = 0;
+      $break_oper = 1;
+      $another_butt->set_sensitive (TRUE);
+    } else {
+      $butt->set_label (text ('Abort'));
+      $another_butt->set_sensitive (FALSE);
+      $started = 1;
+      $break_oper = 0;
+
+      operation_do ();
+
+      $break_oper = 0;#need for normal compare aborted execute
+
+      start_compare();
+
+      $started = 0;
+      $butt->set_label (text ('Execute'));
+      $another_butt->set_sensitive (TRUE);
     }
   }
 }
+
 
 sub show_msg {
   my ($type, $text) = @_;
@@ -894,23 +938,35 @@ sub show_text {
   $dialog->destroy;
 }
 
-sub progress_start {
-  my ($files_num, $text) = @_;
-  $progress_bar->set_text ($text);
-  $progress_bar->set_fraction (0);
-  $progress_bar->set_pulse_step (0.01);
-}
+{
+  my $all;
+  my $curr;
 
-sub progress_next {
-  #$progress_bar->set_text ('progress');
-  $progress_bar->pulse;
-}
+  sub progress_start {
+    my ($files_num, $text) = @_;
+    $all = $files_num;
+    $progress_bar->set_text ($text);
+    $progress_bar->set_fraction (0);
+    $progress_bar->set_pulse_step (0.01);
+  }
 
-sub progress_end {
-  $progress_bar->set_text ('');
-  $progress_bar->set_fraction (0);
-}
+  sub progress_next {
+    #$progress_bar->set_text ('progress');
+    if ($all) {
+       $curr++;
+       $progress_bar->set_fraction ($curr / $all);
+    }
+    else {
+      $progress_bar->pulse;
+    }
+  }
 
+  sub progress_end {
+    $progress_bar->set_text ('');
+    $progress_bar->set_fraction (0);
+    $all = $curr = 0;
+  }
+}
 
 ##############################################################################
 # обработчики
@@ -1019,8 +1075,6 @@ sub oper_del {
 }
 
 sub operation_do {
-  show_msg ('question', 'Execute all operation?') or return;
-
   my ($err, $too_many_err);
 
   my $check_err = sub {
@@ -1042,8 +1096,16 @@ sub operation_do {
   # }
   # return;
 
-  for (my $i = 0; $i < Result_List::row_count(); $i++) {
-    last if $too_many_err;
+  my @inxes;
+  Result_List::get_oper_inx_list (\@inxes);
+
+  return if $#inxes < 0;
+  show_msg ('question', 'Execute all operation?') or return;
+
+  progress_start ($#inxes + 1, text ('execution'));
+
+  for my $i (@inxes) {
+    last if $too_many_err or $break_oper;
 
     my %row = Result_List::row ($i);
 
@@ -1074,14 +1136,13 @@ sub operation_do {
     else {
       $err .= " oper code error for \n$a \n$b\n"
     }
-    while (Glib::MainContext->default->pending)
-      { Glib::MainContext->default->iteration(FALSE) };
+    gui_upd();
   }
 
   if ($err) {
     show_msg ('error', $err);
   }
-  start_compare();
+
 }
 
 sub open_with {
@@ -1351,8 +1412,11 @@ sub start_compare {
     }
     progress_next ();
   }
+
   progress_end ();
-  Result_List::row_count == 0 and show_msg ('info', text ('No differences were found'));
+
+  Result_List::row_count == 0 and ! $break_oper
+      and show_msg ('info', text ('No differences were found'));
 
   Result_List::clear if $break_oper;
 }
@@ -1725,8 +1789,8 @@ END_ICON
 "В результирующем списке сравнения показываются только обычные файлы, директории и специальные файлы"
 ." (файлы устройств, сокеты, каналы) не показываются."
 ." Также файлы могут быть не показаны, если чтение каталога запрещено данному пользователю."
-."Для каждого файла в графе 'отлич' проставляются символы, кратко обозначающие найденные отличия."
-."Если файл присутствует только в одном каталоге проставляется сответственно символ A или B,"
+." Для каждого файла в графе 'отлич' проставляются символы, кратко обозначающие найденные отличия."
+." Если файл присутствует только в одном каталоге проставляется сответственно символ A или B,"
 ." в остальных случаях в зависимости от результатов сравнения."
 ."\nОпции сравнения:"
 ."\n\t'размер'   \tсравнивать размер файлов, проставляет флажок 's'"
