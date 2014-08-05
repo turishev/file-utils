@@ -792,8 +792,8 @@ sub create_window {
 
   $mainbox->pack_start ($eventbox, TRUE, TRUE, 0);
 
-  $progress_bar =Gtk2::ProgressBar->new;
-  $mainbox->pack_start ($progress_bar, FALSE, FALSE, 0);
+#  $progress_bar =Gtk2::ProgressBar->new;
+#  $mainbox->pack_start ($progress_bar, FALSE, FALSE, 0);
 
   # кнопки управления
   $hbox = Gtk2::HBox->new(TRUE);
@@ -803,8 +803,8 @@ sub create_window {
   my $exe_butt = Gtk2::Button->new (text ('Execute'));
   $hbox->pack_start ($exe_butt, TRUE, TRUE, 0);
 
-  $exe_butt->signal_connect (clicked => \&start_stop_oper, $comp_butt);
-  $comp_butt->signal_connect (clicked => \&start_stop_compare, $exe_butt);
+  $exe_butt->signal_connect (clicked => \&operation_do, $comp_butt);
+  $comp_butt->signal_connect (clicked => \&start_compare, $exe_butt);
 
 
   $butt = Gtk2::Button->new (text ('Help'));
@@ -813,80 +813,19 @@ sub create_window {
 
   $butt =  Gtk2::Button->new (text ('Exit'));
   $butt->signal_connect (clicked => \&on_exit, $window);
-  $hbox -> pack_start ($butt, TRUE, TRUE, 0);
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
 
-  $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
+  $mainbox->pack_start($hbox, FALSE, FALSE, 0);
 
   $window->signal_connect ('key-press-event' => \&window_press_key);
 
-  $window -> add ($mainbox);
-  $window -> show_all;
+  $window->add ($mainbox);
+  $window->show_all;
   # после $main_window->show_all !!
   $window->set_icon ($icon_pixbuf);
 
   return $window;
 }
-
-sub init_controls {
-  Result_List::clear();
-  $dir_box_a ->set($ENV{PWD});
-  $dir_box_b ->set($ENV{PWD});
- $dir_box_a ->set('/home/prog/tmp');
- $dir_box_b ->set('/home/prog/tmp');
-
-  $dir_box_a->focus;
-}
-
-{
-  my $started = 0;
-
-  sub start_stop_compare {
-    my ($butt, $another_butt) = @_;
-
-    if ($started) {
-      $butt->set_label (text ('Compare'));
-      $started = 0;
-      $break_oper = 1;
-      $another_butt->set_sensitive (TRUE);
-    } else {
-      $butt->set_label (text ('Abort'));
-      $another_butt->set_sensitive (FALSE);
-      $started = 1;
-      $break_oper = 0;
-      start_compare ();
-      $started = 0;
-      $butt->set_label (text ('Compare'));
-      $another_butt->set_sensitive (TRUE);
-    }
-  }
-
-  sub start_stop_oper {
-    my ($butt, $another_butt) = @_;
-
-    if ($started) {
-      $butt->set_label (text ('Execute'));
-      $started = 0;
-      $break_oper = 1;
-      $another_butt->set_sensitive (TRUE);
-    } else {
-      $butt->set_label (text ('Abort'));
-      $another_butt->set_sensitive (FALSE);
-      $started = 1;
-      $break_oper = 0;
-
-      operation_do ();
-
-      $break_oper = 0;#need for normal compare aborted execute
-
-      start_compare();
-
-      $started = 0;
-      $butt->set_label (text ('Execute'));
-      $another_butt->set_sensitive (TRUE);
-    }
-  }
-}
-
 
 sub show_msg {
   my ($type, $text) = @_;
@@ -919,7 +858,6 @@ sub show_text {
 				  'gtk-ok'     => 'ok');
 
   $dialog->set_size_request (640, 480);
- # $dialog->set_title ($title);
 
   my $textview = Gtk2::TextView->new();
   my $scroll = Gtk2::ScrolledWindow->new;
@@ -938,33 +876,68 @@ sub show_text {
   $dialog->destroy;
 }
 
+sub init_controls {
+  Result_List::clear();
+  $dir_box_a ->set($ENV{PWD});
+  $dir_box_b ->set($ENV{PWD});
+ $dir_box_a ->set('/home/prog/tmp');
+ $dir_box_b ->set('/home/prog/tmp');
+
+  $dir_box_a->focus;
+}
+
 {
   my $all;
   my $curr;
+  my $pb;
+  my $dialog;
 
   sub progress_start {
     my ($files_num, $text) = @_;
     $all = $files_num;
-    $progress_bar->set_text ($text);
-    $progress_bar->set_fraction (0);
-    $progress_bar->set_pulse_step (0.01);
+    $dialog = Gtk2::Dialog->new (text ("Please wait") . '...',
+				 $main_window,
+				 ['modal', 'destroy-with-parent'],
+				  'gtk-cancel' => 'cancel');
+    $dialog->set_size_request (300, -1);
+    $dialog->signal_connect (response => sub {
+					      $break_oper = 1;
+					      $dialog->destroy()});
+    $pb =Gtk2::ProgressBar->new;
+
+    $pb->set_text ($text);
+    $pb->set_fraction (0);
+    $pb->set_pulse_step (0.01);
+    $dialog->vbox->add ($pb);
+    $dialog->show_all;
+    $break_oper = 0;
+  }
+
+  sub progress_reset {
+    my ($files_num, $text) = @_;
+    $all = $files_num;
+    $pb->set_text ($text);
+    $pb->set_fraction (0);
+    $pb->set_pulse_step (0.01);
   }
 
   sub progress_next {
     #$progress_bar->set_text ('progress');
     if ($all) {
        $curr++;
-       $progress_bar->set_fraction ($curr / $all);
+       $pb->set_fraction ($curr / $all);
     }
     else {
-      $progress_bar->pulse;
+      $pb->pulse;
     }
   }
 
   sub progress_end {
-    $progress_bar->set_text ('');
-    $progress_bar->set_fraction (0);
+    $pb->set_text ('');
+    $pb->set_fraction (0);
     $all = $curr = 0;
+    $dialog->destroy();
+    #$dialog->response ('ok'); - call response-callback - not needed
   }
 }
 
@@ -1142,7 +1115,9 @@ sub operation_do {
   if ($err) {
     show_msg ('error', $err);
   }
+  progress_end ();
 
+  start_compare();
 }
 
 sub open_with {
@@ -1381,9 +1356,9 @@ sub start_compare {
   my (%names_a, %names_b);
   progress_start (0, text ('get A file-list'));
   create_path_list ($sftp_a, $start_dir_a, \%names_a);
-  progress_start (0, text ('get B file-list'));
+  progress_reset (0, text ('get B file-list'));
   create_path_list (undef,   $start_dir_b, \%names_b);
-  progress_start (0, text ('compare files'));
+  progress_reset (0, text ('compare files'));
   # print "LIST A:\n";
   # map {print encode ('utf-8',$_),"\n"} sort keys %names_a;
   # print "LIST B:\n";
