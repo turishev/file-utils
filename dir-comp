@@ -548,6 +548,23 @@ sub sftp_run {
 
   $table->attach_defaults ($pass_entr, 3, 4, 1, 2);
 
+  my $status_lb =  Gtk2::Label->new ('Disconnected');
+  $mainbox->pack_start ($status_lb, TRUE, TRUE, 0);
+
+  my $status_set = sub {
+    my ($host, $login) = @_;
+    if ($host) {
+      $status_lb->set_markup ("<span weight=\"bold\" foreground=\"red\">"
+			      ." Connected to $host as '$login'"
+			     . "</span>");
+    }
+    else {
+      $status_lb->set_markup ("<span weight=\"bold\" foreground=\"red\">"
+			      . 'Disconnected'
+			     . "</span>");
+    }
+  };
+
   my $tree;
 
   my $hbox = Gtk2::HBox->new(TRUE);
@@ -563,8 +580,8 @@ sub sftp_run {
 							  $port_entr->get_text,
 							  $login_entr->get_text,
 							  $pass_entr->get_text);
-			   $dialog->set_title (::text ("SFTP connect")
-					       . ($self->{sftp} ? ' - connected':''));
+
+			   &$status_set ($host_entr->get_text, $login_entr->get_text);
 			 });
 
 
@@ -583,16 +600,19 @@ sub sftp_run {
 
   $butt =  Gtk2::Button->new (::text ('Disconnect'));
   $hbox->pack_start ($butt, TRUE, TRUE, 0);
-  $butt->signal_connect (clicked =>sub {sftp_disconnect ($self)});
+  $butt->signal_connect (clicked =>sub {sftp_disconnect ($self);
+					&$status_set()});
 
   if ($self->{sftp}) {
     $host_entr->set_text ($self->{sftp_host});
     $port_entr->set_text ($self->{sftp_port});
     $login_entr->set_text ($self->{sftp_login});
     $pass_entr->set_text ($self->{sftp_password});
+    &$status_set ($self->{sftp_host}, $self->{sftp_login});
   }
   else {
     $port_entr->set_text ('22');
+    &$status_set ();
   }
 
   $dialog->show_all;
