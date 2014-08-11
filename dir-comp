@@ -362,7 +362,7 @@ sub file_dialog_run {
   my $caption = $self->{label};
 
   my $dialog = Gtk2::FileChooserDialog->new
-    (::text ('Select dir ') . $caption,
+    (::text ('Select dir') . ' ' . $caption,
      undef,
      'select-folder',
      'gtk-ok'     => 'ok',
@@ -511,7 +511,7 @@ sub sftp_run {
     return;
   }
 
-  my $dialog = Gtk2::Dialog->new (::text ("Select remote dir") 
+  my $dialog = Gtk2::Dialog->new (::text ("SFTP connect") 
 				  . ($self->{sftp} ? ' - connected':''),
 				  $main_window,
 				  ['modal', 'destroy-with-parent'],
@@ -563,7 +563,7 @@ sub sftp_run {
 							  $port_entr->get_text,
 							  $login_entr->get_text,
 							  $pass_entr->get_text);
-			   $dialog->set_title (::text ("Select remote dir")
+			   $dialog->set_title (::text ("SFTP connect")
 					       . ($self->{sftp} ? ' - connected':''));
 			 });
 
@@ -578,7 +578,7 @@ sub sftp_run {
 			     #$table->attach_defaults ($tree_box, 0, 5, 3, 4);
                              $mainbox->pack_start ($tree_box, TRUE, TRUE, 0);
 			   }
-			   else {::show_msg ('error', ::text ('not connected'))}
+			   else {::show_msg ('error', ::text ('Not connected'))}
 			 });
 
   $butt =  Gtk2::Button->new (::text ('Disconnect'));
@@ -592,9 +592,6 @@ sub sftp_run {
     $pass_entr->set_text ($self->{sftp_password});
   }
   else {
-    $host_entr->set_text ('book');
-    $login_entr->set_text ('prog');
-    $pass_entr->set_text ('sss');
     $port_entr->set_text ('22');
   }
 
@@ -880,9 +877,6 @@ sub init_controls {
   Result_List::clear();
   $dir_box_a ->set($ENV{PWD});
   $dir_box_b ->set($ENV{PWD});
- $dir_box_a ->set('/home/prog/tmp');
- $dir_box_b ->set('/home/prog/tmp');
-
   $dir_box_a->focus;
 }
 
@@ -1332,7 +1326,8 @@ sub comp_content {
   }
 
   my $res = (compare ($path_a, $path_b) == 0 ?
-	     "Content is equevalent" : "Content is different");
+	     text ("Content is equevalent")
+	     : text ("Content is different"));
   show_msg ('info', $res);
 }
 
@@ -1354,11 +1349,11 @@ sub start_compare {
   !$sftp_a and $start_dir_a ne $start_dir_b || return;
 
   my (%names_a, %names_b);
-  progress_start (0, text ('get A file-list'));
+  progress_start (0, text ('get file-list') . ' A');
   create_path_list ($sftp_a, $start_dir_a, \%names_a);
-  progress_reset (0, text ('get B file-list'));
+  progress_reset (0, text ('get file-list') . ' B');
   create_path_list (undef,   $start_dir_b, \%names_b);
-  progress_reset (0, text ('compare files'));
+  progress_reset (0, text ('compare dirs'));
   # print "LIST A:\n";
   # map {print encode ('utf-8',$_),"\n"} sort keys %names_a;
   # print "LIST B:\n";
@@ -1741,15 +1736,56 @@ END_ICON
                  'delete error'          => {ru => 'Ошибки удаления'},
 		 'show all'              => {ru => 'показать все'},
                  'Help'                  => {ru => 'Справка'},
-                 'Abort'                 => {ru => 'Прервать'}
+                 'Abort'                 => {ru => 'Прервать'},
+                 'get file-list'         => {ru => 'получаю список файлов'},
+                 'compare dirs'          => {ru => 'сравнение директорий'},
+                 'Content is equevalent' => {ru => 'Содержимое совпадает'},
+                 'Content is different'  => {ru => 'Содержимое отличается'},
+                 'Connect'               => {ru => 'Подключиться'},
+                 'Select dir'            => {ru => 'Выбрать каталог'},
+                 'Disconnect'            => {ru => 'Отключиться'},
+                 'Not connected'         => {ru => 'Не подключено'},
 		);
 
-
   %help_text = (en => [
-		       {title => '',
+		       {title => 'Overview',
 			text  =>
-""
-		       }
+"Program compares two directories and allows you to synchronize them with full manual control."
+. "\n One of the directories may be remote and accessible via SFTP."
+		       },
+		       {title => 'Compare',
+			text  =>
+"Compare started on click 'Compare' button."
+. "\nAfter compare succesfull, different files shows in result list and in it's 'diff'-column shows one or more letters indicating the difference:"
+. "\n\tA - file exists only in dir A, B - file exists only in dir B."
+. "\nIf checked one or more options check-boxes 'size', 'time', 'content', "
+. "further compares file-attributes and shows letters:"
+. "\n\ts\tdifferent size"
+. "\n\tt\tdifferent time"
+. "\n\tc\tdifferent file content"
+. "\n\t=\tdifferents not found,  but checked option 'show all', it allows you to view this files
+and check its used any other method."
+. "\nIn result list shows only ordinary files, special files (socket, pipe, device) and directories not compares and not shows in result list."
+		       },
+		       {title => 'Operation',
+			text  =>
+"After comparing the files, you can copy, move, delete files between directories."
+. " To do this you need set checkboxes in result list and click 'Execute' button."
+. "\n\tA->B\tcopy file from A into B (with replace file and create path if need)"
+. "\n\tdel A\tdelete file from A directory"
+. "\nIf for any file selected 'copy' and 'delete' operation, actually will be performed 'move' operation (if it possible)."
+		       },
+		       {title => 'Remote compare and synchronization (SFTP)',
+			text  =>
+"For use this feature you need install Net::SFTP::Foreign Perl module. It exists in many Linux repo and CPAN."
+. "\nRemote host should allow SSH login."
+. "\nGenerally use of SFTP similar to work with local directories, but for diff and view file, "
+. "remote file will be downloaded into /tmp."
+		       },
+		       {title => 'Context menu',
+			text  =>
+"Context menu (on right-click) provides additional features as diff, view file and copy it into any other directory."
+		       },
 
 		      ],
 		ru => [
@@ -1764,7 +1800,7 @@ END_ICON
 "В результирующем списке сравнения показываются только обычные файлы, директории и специальные файлы"
 ." (файлы устройств, сокеты, каналы) не показываются."
 ." Также файлы могут быть не показаны, если чтение каталога запрещено данному пользователю."
-." Для каждого файла в графе 'отлич' проставляются символы, кратко обозначающие найденные отличия."
+."\nДля каждого файла в графе 'отлич' проставляются символы, кратко обозначающие найденные отличия."
 ." Если файл присутствует только в одном каталоге проставляется сответственно символ A или B,"
 ." в остальных случаях в зависимости от результатов сравнения."
 ."\nОпции сравнения:"
