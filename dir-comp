@@ -1254,7 +1254,8 @@ sub diff_files {
   my $out;
   $out .= $_ while <$fh>;
   close $fh;
-  show_text ($out, "diff:$row{name}");
+  $out ? show_text ($out, "diff:$row{name}")
+    : show_msg ('info', text ('no differece found'));
 }
 
 sub gui_upd {
@@ -1387,7 +1388,11 @@ sub start_compare {
       my ($diff);
       $check_size and $names_a{$f}->{size} ne $names_b{$f}->{size} and $diff .= 's';
       $check_date and $names_a{$f}->{mtime} ne $names_b{$f}->{mtime} and $diff .= 't';
-      $check_content and compare ($start_dir_a . $f, $start_dir_b . $f) and $diff .= 'c';
+
+      if ($check_content) {
+	 $diff .= 'c' if $names_a{$f}->{size} ne $names_b{$f}->{size} or
+	   compare ($start_dir_a .'/' . $f, $start_dir_b . '/' . $f);
+      }
 
       ! $diff and $show_all and  $diff = '=';
 
@@ -1770,27 +1775,29 @@ END_ICON
   %help_text = (en => [
 		       {title => 'Overview',
 			text  =>
-"Program compares two directories and allows you to synchronize them with full manual control."
+"Program compares two directories and allows to synchronize them with full manual control."
 . "\n One of the directories may be remote and accessible via SFTP."
 		       },
 		       {title => 'Compare',
 			text  =>
-"Compare started on click 'Compare' button."
-. "\nAfter compare succesfull, different files shows in result list and in it's 'diff'-column shows one or more letters indicating the difference:"
+"Comparison starts on click 'Compare' button."
+. "\nAfter compare succesfull, different files is shown in result list. The 'diff'-column contanes one or more letters which indicate the difference:"
 . "\n\tA - file exists only in dir A, B - file exists only in dir B."
-. "\nIf checked one or more options check-boxes 'size', 'time', 'content', "
+. "\nIf one or more options are checked check-boxes 'size', 'time', 'content', "
+."There are some options 'size', 'time', 'content'. If one or more options are checked, additional information are compared and it shows
+letters"
 . "further compares file-attributes and shows letters:"
 . "\n\ts\tdifferent size"
 . "\n\tt\tdifferent time"
 . "\n\tc\tdifferent file content"
-. "\n\t=\tdifferents not found,  but checked option 'show all', it allows you to view this files
-and check its used any other method."
-. "\nIn result list shows only ordinary files, special files (socket, pipe, device) and directories not compares and not shows in result list."
+. "\n\t=\tdifferents not found,  but checked option 'show all', it allows you to view these files
+and test them with any other method."
+. "\n Result list shows only ordinary files. Special files (socket, pipe, device) and directories not compares and not shows in result list."
 		       },
 		       {title => 'Operation',
 			text  =>
-"After comparing the files, you can copy, move, delete files between directories."
-. " To do this you need set checkboxes in result list and click 'Execute' button."
+"After comparing the files, you can copy, move files from one directory to another or delete files."
+. " For this you need set checkboxes in result list and click 'Execute' button."
 . "\n\tA->B\tcopy file from A into B (with replace file and create path if need)"
 . "\n\tdel A\tdelete file from A directory"
 . "\nIf for any file selected 'copy' and 'delete' operation, actually will be performed 'move' operation (if it possible)."
