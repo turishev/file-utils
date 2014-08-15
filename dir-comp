@@ -128,24 +128,38 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     #print "check_box_hnd:$row,$col\n";
 
     @save_selection = selected_inx();#save to restore
+    my $check_on_sel = 0;
 
-    if ($#save_selection > 0
-	and $row >= $save_selection[0]
-	and $row <= $save_selection[$#save_selection]) {
-      for my $i (@save_selection) {
-        my $dtype = $list->{data}->[$i]->[$clm{diff}];
-	#print $list->{data}->[$i]->[0], "$dtype\n";
+    for my $k (@save_selection) {
+      if ($k == $row) {
+        # click on in selection area
+	$check_on_sel = 1;
+	last;
+      }
+    }
 
-	if (($dtype ne 'B' or $col != $clm{a_cp} and $col != $clm{a_del})
-	    and
-	    ($dtype ne 'A' or $col != $clm{b_cp} and $col != $clm{b_del})
-	    and $i != $row) {
-	  $list->{data}->[$i]->[$col] = ! ($list->{data}->[$i]->[$col]);
-	  # инвертируем selected ТОЛЬКО ЕСЛИ ВИДИМЫ checkbox и не тот,
-	  # по которому был щелчок
+    if ($check_on_sel) {
+      $val = $list->{data}->[$row]->[$col];
+
+      if ($#save_selection > 0
+	  and $row >= $save_selection[0]
+	  and $row <= $save_selection[$#save_selection]) {
+
+	for my $i (@save_selection) {
+	  my $dtype = $list->{data}->[$i]->[$clm{diff}];
+	  #print $list->{data}->[$i]->[0], "$dtype\n";
+
+	  if (($dtype ne 'B' or $col != $clm{a_cp} and $col != $clm{a_del})
+	      and
+	      ($dtype ne 'A' or $col != $clm{b_cp} and $col != $clm{b_del})){
+	    $list->{data}->[$i]->[$col] = $val;
+	    #$list->{data}->[$i]->[$col] = ! ($list->{data}->[$i]->[$col]);
+	    # проствляем selected ТОЛЬКО ЕСЛИ ВИДИМЫ
+	  }
 	}
       }
     }
+    else {@save_selection = ()} # delete seletion
   }
 
   sub clear {
@@ -741,7 +755,7 @@ sub create_window {
   $mainbox->pack_start ($dir_box_b->box, FALSE, FALSE, 0);
 
   # кнопки управления
-  my $hbox = Gtk2::HBox->new(TRUE);
+  my $hbox = Gtk2::HBox->new (FALSE, 5);
   my $butt;
 
   $chk_size = Gtk2::CheckButton->new (text ('size'));
