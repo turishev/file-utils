@@ -659,7 +659,7 @@ sub check_file {
     $result_list->add ($name, $dir, $type, num_format ($size),
 		       time_format($time), $perm, $owner, $info);
     $found_counter++;
-    $main_window->set_title ($main_title . ':' . $found_counter);
+    $main_window->set_title ($main_title . ':' . $found_counter . '..');
   }
   while (Glib::MainContext->default->pending)
     { Glib::MainContext->default->iteration(FALSE) };
@@ -734,7 +734,7 @@ sub on_start_search {
   }
 
    $main_window->set_title ($main_title .':'. $result_list->row_count()
-   			   . ($break_search ? ' (aborted)' : ' (end)'));
+   			   . ($break_search ? ' (aborted)' : ''));
 
   $stop_button->set_sensitive (0);
   $start_button->set_sensitive (1);
