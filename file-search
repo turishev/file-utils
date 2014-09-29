@@ -29,10 +29,10 @@ my %default = (name                => '',
                directory => $ENV{PWD},
                text_case_sensitive => 0);
 
-our $VERSION = '1.00';
-
+our $VERSION = '1.01';
 
 ##### global var ######################################################
+
 my $icon_data;
 my $lang  = get_lang ();
 my %local_text;
@@ -628,7 +628,7 @@ sub check_file {
   $res &&= (! defined $search_size{min} or $size >= $search_size{min});
   $res &&= (! defined $search_size{max} or $size <= $search_size{max});
 
-  $res &&= (! @search_types or $type ~~ @search_types);
+  $res &&= (! @search_types or grep {$type eq $_} @search_types);
 
   #   print 'FILE:"', encode ('utf8', $path), "\"\n" if $res;
 
@@ -640,8 +640,10 @@ sub check_file {
     if (open FILE, $name) {
       #print "text search in:$name\n";
       my $err;
-      local $SIG{__WARN__} = sub {warn "Error regexp search in:'", encode ('utf8', $path), "'\n"; $err = 1;};
-      local $SIG{__DIE__} = sub {warn "ERROR regexp search in:'", encode ('utf8', $path), "'\n"; $err = 1;};
+      local $SIG{__WARN__} = sub {warn "Error regexp search in:'",
+				    encode ('utf8', $path), "'\n"; $err = 1;};
+      local $SIG{__DIE__} = sub {warn "ERROR regexp search in:'",
+				   encode ('utf8', $path), "'\n"; $err = 1;};
       while (<FILE>) {
         $text_res = eval {($_ =~ $search_text{re})};
         last if $text_res or $err;
@@ -659,7 +661,7 @@ sub check_file {
     $result_list->add ($name, $dir, $type, num_format ($size),
 		       time_format($time), $perm, $owner, $info);
     $found_counter++;
-    $main_window->set_title ($main_title . ':' . $found_counter);
+    $main_window->set_title ($main_title . ':' . $found_counter . '..');
   }
   while (Glib::MainContext->default->pending)
     { Glib::MainContext->default->iteration(FALSE) };
@@ -734,7 +736,7 @@ sub on_start_search {
   }
 
    $main_window->set_title ($main_title .':'. $result_list->row_count()
-   			   . ($break_search ? ' (aborted)' : ' (end)'));
+   			   . ($break_search ? ' (aborted)' : ''));
 
   $stop_button->set_sensitive (0);
   $start_button->set_sensitive (1);
@@ -1639,7 +1641,7 @@ package main;
 
 
 BEGIN {
-  if ($ARGV[0] eq '-v' or $ARGV[0] eq '--version') {
+  if (@ARGV and ($ARGV[0] eq '-v' or $ARGV[0] eq '--version')) {
     print "$main_title $VERSION\n";
     exit;
   }

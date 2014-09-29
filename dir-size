@@ -23,7 +23,7 @@ my $file_manager = 'thunar';
 my $open_helper  = 'exo-open';
 my $main_title   = 'dir-size';
 
-our $VERSION = '1.00';
+our $VERSION = '1.01';
 
 my %opt;
 getopts ('d:v', \%opt);
@@ -95,11 +95,17 @@ sub create_window {
   $hbox->pack_start ($button, FALSE, FALSE, 0);
 
   $dir_label = Gtk2::Label->new ($base_dir);
+
   #$dir_label->set_line_wrap_mode ('char');
   $dir_label->set_line_wrap (TRUE);
 
   $hbox->pack_start ($dir_label, FALSE, FALSE, 0);
   $box->pack_start ($hbox, FALSE, FALSE, 0);
+
+  $info_label = Gtk2::Label->new ();
+  $info_label->set_alignment (0,0.5);
+  $box->pack_start ($info_label, FALSE, FALSE, 0);
+
 
   my $menu = Menu::create ('dir-size', \&dirsize_handler,
 			   'Open',     \&open_handler,
@@ -162,10 +168,6 @@ sub create_window {
   $sel_label = Gtk2::Label->new ();
   #$sum_label->set_alignment (0,0.5);
   $hbox->pack_start ($sel_label, TRUE, TRUE, 0);
-
-  $info_label = Gtk2::Label->new ();
-  $hbox->pack_end ($info_label, FALSE, FALSE, 0);
-
   $box->pack_start ($hbox, FALSE, FALSE, 0);
 
   $hbox = Gtk2::HBox->new();
@@ -269,7 +271,7 @@ sub start_search {
     my ($type, $size) = file_parm ($name);
 
     if (! defined $type) {
-      carp "error get file params for :", encode ('utf8', $name), "\n";
+      carp "error get file params for:", encode ('utf8', $name), "\n";
       next;
     }
     if ($type eq 'f') {
@@ -290,13 +292,14 @@ sub on_show_window {
   else {
     for my $a (@ARGV) {
       if ($a =~ /\//) {
-	show_msg ('error', 'Command line arguments must contain only file names in current directory!');
+	show_msg ('error',
+		  'Command line arguments must contain only file names in current directory!');
 	return;
       }
       $a = decode ('utf8', $a);
     }
     if (@ARGV) {
-      show_info ('*');
+      show_info ('specified directories and files');
       start_search (\@ARGV);
     }
   }
