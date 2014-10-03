@@ -9,7 +9,7 @@ my $main_title  = 'dir-comp';
 my $open_helper = 'exo-open';
 my $editor      = 'leafpad';
 
-our $VERSION='1.00';
+our $VERSION='1.01';
 
 show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 
@@ -700,6 +700,8 @@ use File::Path;
 use File::Basename;
 use MIME::Base64 qw(decode_base64);
 use File::Compare;
+use URI::Escape;
+
 use strict;
 
 my ($start_dir_a, $start_dir_b, $sftp_a);
@@ -1610,7 +1612,7 @@ sub clipboard_copy {
   };
 
   my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
-  $clipboard->set_with_data (\&get_func, \&clear_func, $path,
+  $clipboard->set_with_data (\&get_func, \&clear_func, [$path], # need list
                              ($target_text, $target_copy_file));
   $clipboard->store();
 
@@ -1621,18 +1623,25 @@ sub clipboard_copy {
 
 
 sub get_func {
-  my ($clipboard, $selectiondata, $info, $path) = @_;
+  my ($clipboard, $selectiondata, $info, $names) = @_;
+  my $namestr;
+  # нужно экранировать пробелы (хвостовые в первую очередь)
+  # и другие символы, минимум это - " #%"
+  # аналогично g_file_new_for_path
+
+  map {$namestr .= 'file://' . uri_escape ($_, q( ?<>{}#%`;")) . "\n"} @$names;
+  # print "info:$info;names:'$namestr'\n";
 
   if ($info == 1) {
-    $selectiondata->set ($selectiondata->target(), 8, $path);
+    $selectiondata->set ($selectiondata->target(), 8, join ("\n", @$names));
   }
   if ($info == 2) {
     $selectiondata->set ($selectiondata->target(), 8,
-                         "copy\nfile://$path");
+                         "copy\n" . $namestr);
   }
   if ($info == 3) {
     $selectiondata->set ($selectiondata->target(), 8,
-                         "cut\nfile://$path");
+                         "cut\n" . $namestr);
     Result_List::delete_item (Result_List::selected_inx_0);
   }
 }

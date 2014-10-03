@@ -14,6 +14,7 @@ use Gtk2 '-init';
 use File::Find;
 use File::Copy;
 use MIME::Base64 qw(decode_base64);
+use URI::Escape;
 
 use strict;
 no warnings "experimental::smartmatch";
@@ -29,7 +30,7 @@ my %default = (name                => '',
                directory => $ENV{PWD},
                text_case_sensitive => 0);
 
-our $VERSION = '1.01';
+our $VERSION = '1.02';
 
 ##### global var ######################################################
 
@@ -886,6 +887,9 @@ sub list_press_key {
 # Clipboard
 sub clipboard_copy {
   my $names = [$result_list->selected_names];
+
+  #map {print "cpb-copy:'$_'\n"} @$names;
+
   my $target_text = {
       target => 'UTF8_STRING', # some string representing the drag type
       flags => [], # Gtk2::TargetFlags
@@ -926,10 +930,16 @@ sub clipboard_cut {
 
 sub get_func {
   my ($clipboard, $selectiondata, $info, $names) = @_;
-  my $namestr = "file://" . join ("\nfile://",  @$names);
+  my $namestr;
+  # нужно экранировать пробелы (хвостовые в первую очередь)
+  # и другие символы, минимум это - " #%"
+  # аналогично g_file_new_for_path
+
+  map {$namestr .= 'file://' . uri_escape ($_, q( ?<>{}#%`;")) . "\n"} @$names;
+  # print "info:$info;names:'$namestr'\n";
 
   if ($info == 1) {
-    $selectiondata->set ($selectiondata->target(), 8, $namestr);
+    $selectiondata->set ($selectiondata->target(), 8, join ("\n", @$names));
   }
   if ($info == 2) {
     $selectiondata->set ($selectiondata->target(), 8,

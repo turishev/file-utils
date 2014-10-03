@@ -16,6 +16,7 @@ use File::Basename;
 use File::Path;
 use Getopt::Std;
 use MIME::Base64 qw(decode_base64);
+use URI::Escape;
 use Carp;
 use strict;
 
@@ -23,7 +24,7 @@ my $file_manager = 'thunar';
 my $open_helper  = 'exo-open';
 my $main_title   = 'dir-size';
 
-our $VERSION = '1.01';
+our $VERSION = '1.02';
 
 my %opt;
 getopts ('d:v', \%opt);
@@ -358,9 +359,16 @@ sub del_list {
   show_sum ();
 }
 
+sub path_to_name {
+  my $path = shift;
+  $path =~ s#$base_dir/##;
+  return $path;
+}
+
 sub find_inx {
   my $name = shift;
-  for my $i ($list->{data}) {
+  my $last = $#{$list->{data}};
+  for (my $i =0; $i <= $last; $i++) {
     if ($list->{data}[$i]->[1] eq $name) {
       return $i;
     }
@@ -560,6 +568,7 @@ sub list_click_handler {
 # Clipboard
 sub clipboard_copy {
   my $names = [file_path_utf8 (selected_name ())];
+  #print "cbp-copy:@$names\n";
   #print "copy:@$names\n";
   my $target_text = {
       target => 'UTF8_STRING', # some string representing the drag type
@@ -600,10 +609,15 @@ sub clipboard_cut {
 
 sub get_func {
   my ($clipboard, $selectiondata, $info, $names) = @_;
-  my $namestr = "file://" . join ("\nfile://",  @$names);
+  my $namestr;
+  # нужно экранировать пробелы (хвостовые в первую очередь)
+  # и другие символы, минимум это - " #%"
+  # аналогично g_file_new_for_path
+  map {$namestr .= 'file://' . uri_escape ($_, q( ?<>{}#%`;")) . "\n"} @$names;
+  #print "info:$info;names:'$namestr'\n";
 
   if ($info == 1) {
-    $selectiondata->set ($selectiondata->target(), 8, $namestr);
+    $selectiondata->set ($selectiondata->target(), 8, join ("\n", @$names));
   }
   if ($info == 2) {
     $selectiondata->set ($selectiondata->target(), 8,
@@ -612,7 +626,7 @@ sub get_func {
   if ($info == 3) {
     $selectiondata->set ($selectiondata->target(), 8,
                          "cut\n" . $namestr);
-    $list->delete_names (@$names);
+    map {del_list (find_inx (path_to_name ($_)))} @$names;
   }
 }
 
