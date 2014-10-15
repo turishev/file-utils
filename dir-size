@@ -24,7 +24,7 @@ my $file_manager = 'thunar';
 my $open_helper  = 'exo-open';
 my $main_title   = 'dir-size';
 
-our $VERSION = '1.02';
+our $VERSION = '1.03';
 
 my %opt;
 getopts ('d:v', \%opt);
