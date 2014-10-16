@@ -17,7 +17,7 @@ use MIME::Base64 qw(decode_base64);
 use URI::Escape;
 
 use strict;
-no warnings "experimental::smartmatch";
+#no warnings "experimental::smartmatch";
 
 my $file_manager="thunar";
 my $editor="leafpad";
@@ -30,7 +30,36 @@ my %default = (name                => '',
                directory => $ENV{PWD},
                text_case_sensitive => 0);
 
-our $VERSION = '1.02';
+
+# define key for action in form:
+# ctrl-x, ctrl-alt-x, ctrl-alt-shift-x, x
+# (case-insensitive)
+my @menu_actions = ({name    => 'Open',
+		     key     => 'Ctrl-w',
+		     handler => \&open_handler},
+                    {name    => 'Editor',
+		     key     => 'Ctrl-e',
+		     handler => \&edit_handler},
+                    {name    => 'Open dir',
+		     key     => 'Ctrl-f',
+		     handler => \&open_dir_handler},
+		    {name    => 'Copy',
+		     key     => 'Ctrl-c',
+		     handler => \&clipboard_copy},
+		    {name    => 'Cut',
+		     key     => 'Ctrl-x',
+		     handler => \&clipboard_cut},
+		    {name    => 'Delete',
+		     key     => 'Ctrl-d',
+		     handler => \&delete_handler},
+                    {name    => 'Copy to ..',
+		     key     => 'Ctrl-s',
+		     handler => \&copy_to_handler},
+                    {name    => 'Rename',
+		     key     => 'Ctrl-n',
+		     handler => \&rename_handler});
+
+our $VERSION = '1.03';
 
 ##### global var ######################################################
 
@@ -137,14 +166,7 @@ my (%search_name,  %search_time, %search_size,
 
   $table->attach_defaults ($grep_box->box, 2, 4, 4, 5);
 
-  my $menu = Menu::create (text ("Open")       ."\tCtrl-w", \&open_handler,
-			   text ("Editor")     ."\tCtrl-e", \&edit_handler,
-			   text ("Open dir")   ."\tCtrl-f", \&open_dir_handler,
-			   text ("Copy")       ."\tCtrl-c", \&clipboard_copy,
-			   text ("Cut")        ."\tCtrl-x", \&clipboard_cut,
-			   text ("Delete")     ."\tCtrl-d", \&delete_handler,
-			   text ("Rename")     ."\tCtrl-n", \&rename_handler,
-			   text ("Copy to ..") ."\tCtrl-s", \&copy_to_handler);
+  Menu::create (\@menu_actions);
 
   $result_list = File_List->new ();
   $result_list->key_press_handler (\&list_press_key);
@@ -158,7 +180,7 @@ my (%search_name,  %search_time, %search_size,
 			      my $button_nr = $event->button;
 			      ($result_list->selected_inx)
 				&& ($button_nr == 3)
-				  &&($menu->popup(undef,undef,undef,undef,0,0));
+				  &&(Menu::show());
 			    });
 
   $eventbox->add ($result_list->box());
@@ -864,27 +886,36 @@ sub list_press_key {
   my $key_nr = $event->keyval();
   my $key = Gtk2::Gdk->keyval_name ($key_nr);
   my $modif =  $event->state();
-  #  print "list press key:$key_nr, modif:$modif\n";
+  #print "list press key:$key_nr,$key, modif:$modif\n";
 
-  if ($modif & 'control-mask') {
-     open_handler ()     if $key eq 'w'; #ctrl-w
-     clipboard_copy ()   if $key eq 'c'; #ctrl-c
-     clipboard_cut ()    if $key eq 'x'; #ctrl-x
-     delete_handler ()   if $key eq 'd'; #ctrl-d
-     open_dir_handler () if $key eq 'f'; #ctrl-f
-     edit_handler ()     if $key eq 'e' ;#ctrl-e
-     rename_handler ()   if $key eq 'n' ;#ctrl-n
-     copy_to_handler ()  if $key eq 's' ;#ctrl-s
+  if (lc ($key) eq 'menu') {# контекстное меню
+    Menu::show ();
+    # без этого меню не всплывает :
+    return TRUE;
   }
 
-  # if ($key_nr == 65383) {# контекстное меню
-  #   $menu->popup;
-  #   # без этого меню не всплывает :
-  #   return TRUE;
-  # }
+  if ($key_nr < 256) {# ignore ctrl alt shift esc ..
+    my $handler = get_key_handler($modif, $key);
+    &$handler if $handler;
+  }
+
   return FALSE;
 }
 
+sub get_key_handler {
+  my ($modif, $key) = @_;
+  $key = ($modif & 'control-mask'? 'ctrl-':'')
+    . ($modif & 'mod1-mask'? 'alt-':'')
+      . ($modif & 'shift-mask'? 'shift-':'')
+	. lc ($key);
+  #print "key:$key\n";
+  for my $act (@menu_actions) {
+    if ($key eq lc ($act->{key})) {
+      return $act->{handler};
+    }
+  }
+  return undef;
+}
 #############################################################################
 # Clipboard
 sub clipboard_copy {
@@ -1569,28 +1600,50 @@ sub box {
 }
 
 ######################################################################
-package Menu;
-use utf8;
+{
+  package Menu;
+  use utf8;
+  use Glib qw/TRUE FALSE/;
 
-sub create {
-  my $menu = Gtk2::Menu->new;
+  my $menu;
 
-  $menu->append(Gtk2::TearoffMenuItem->new);
-  my ($item, $name, $handler);
-  while ($name = shift) {
-    $handler = shift;
-    if ($name =~ /^-+$/) {
-      $item = Gtk2::SeparatorMenuItem->new();
+  sub create {
+    my $descr = shift;
+    $menu = Gtk2::Menu->new;
+
+    #$menu->append(Gtk2::TearoffMenuItem->new);
+
+    for my $d (@$descr) {
+      my ($item, $name, $handler, $opt);
+
+      if (exists $d->{opt} and $d->{opt} eq 'dir_only') {
+	$opt = 1;		# check on show
+      } else {
+	$opt = 0;
+      }
+
+      $handler = shift;
+      if ($d->{name} =~ /^-+$/) {
+	$item = Gtk2::SeparatorMenuItem->new();
+      } else {
+	$item = Gtk2::MenuItem->new_with_label (::text($d->{name}) . "\t" . $d->{key});
+	$item->signal_connect ('activate' => $d->{handler});
+      }
+      $item->set_property ('user-data', $opt);
+      $menu->append ($item);
     }
-    else {
-      $item = Gtk2::MenuItem->new_with_label ($name);
-      $item->signal_connect ('activate' => $handler);
-    }
-    $menu->append ($item);
+    $menu->show_all;
+    $menu->signal_connect ('hide' => \&Menu::hide);
+    return undef;
   }
-  $menu->show_all;
-  return $menu;
+
+  sub show {
+    $menu->popup (undef, undef, undef, undef, 0, 0);
+  }
+
+  sub hide {}
 }
+
 # END Menu ###########################################################
 package Dir_Box;
 
@@ -1649,8 +1702,6 @@ sub set {
 # END Dir_Box ########################################################
 
 package main;
-
-
 
 BEGIN {
   if (@ARGV and ($ARGV[0] eq '-v' or $ARGV[0] eq '--version')) {
