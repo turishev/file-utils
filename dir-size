@@ -26,10 +26,10 @@ my $main_title   = 'dir-size';
 
 # define key for action in form:
 # ctrl-x, ctrl-alt-x, ctrl-alt-shift-x, x
-# case-insensitive
+# (case-insensitive)
 my @menu_actions = ({name    => 'dir-size',
 		     key     => 'Ctrl-f',
-                     test    => 'd',
+                     opt    => 'dir_only',
 		     handler => \&dirsize_handler},
 		    {name    => 'Open',
 		     key     => 'Ctrl-w',
@@ -59,7 +59,6 @@ my $list;
 
 my $icon_data;
 my $main_window;
-my $menu;
 my $dir_label;
 my $stat_label;
 my $sum_label;
@@ -132,7 +131,7 @@ sub create_window {
   $info_label->set_alignment (0,0.5);
   $box->pack_start ($info_label, FALSE, FALSE, 0);
 
-  $menu = Menu::create (\@menu_actions);
+  Menu::create (\@menu_actions);
 
   $list = Gtk2::SimpleList->new ('size' => 'text',
 				 'name' => 'text');
@@ -168,7 +167,7 @@ sub create_window {
 			      my $button_nr = $event->button;
 			      (selected_inx())
 				&& ($button_nr == 3)
-				  &&($menu->popup(undef,undef,undef,undef,0,0));
+				  &&(Menu::show ());
 			    });
 
   $eventbox->add ($scroll);
@@ -607,7 +606,7 @@ sub list_press_key {
   #print "list press key:$key_nr,$key, modif:$modif\n";
 
   if (lc ($key) eq 'menu') {# контекстное меню
-    $menu->popup(undef,undef,undef,undef,0,0);
+    Menu::show ();
     # без этого меню не всплывает :
     return TRUE;
   }
@@ -706,30 +705,75 @@ sub clear_func {
 }
 
 ##############################################################################
-package Menu;
-use utf8;
+{
+  package Menu;
+  use utf8;
+  use Glib qw/TRUE FALSE/;
 
-sub create {
-  my $descr = shift;
-  my $menu = Gtk2::Menu->new;
+  my $menu;
 
-  #$menu->append(Gtk2::TearoffMenuItem->new);
+  sub create {
+    my $descr = shift;
+    $menu = Gtk2::Menu->new;
 
-  my ($item, $name, $handler);
+    #$menu->append(Gtk2::TearoffMenuItem->new);
 
-  for my $d (@$descr) {
-    $handler = shift;
-    if ($d->{name} =~ /^-+$/) {
-      $item = Gtk2::SeparatorMenuItem->new();
+    for my $d (@$descr) {
+      my ($item, $name, $handler, $opt);
+
+      if (exists $d->{opt} and $d->{opt} eq 'dir_only') {
+	$opt = 1;		# check on show
+      } else {
+	$opt = 0;
+      }
+
+      $handler = shift;
+      if ($d->{name} =~ /^-+$/) {
+	$item = Gtk2::SeparatorMenuItem->new();
+      } else {
+	$item = Gtk2::MenuItem->new_with_label (::text($d->{name}) . "\t" . $d->{key});
+	$item->signal_connect ('activate' => $d->{handler});
+      }
+      $item->set_property ('user-data', $opt);
+      $menu->append ($item);
     }
-    else {
-      $item = Gtk2::MenuItem->new_with_label (::text($d->{name}) . "\t" . $d->{key});
-      $item->signal_connect ('activate' => $d->{handler});
-    }
-    $menu->append ($item);
+    $menu->show_all;
+    $menu->signal_connect ('hide' => \&Menu::hide);
+    return undef;
   }
-  $menu->show_all;
-  return $menu;
+
+  sub show {
+    my @sel = ::selected_files();
+    return unless @sel;
+
+    my $has_dir;
+    for my $i (@sel) {
+      if ($i =~m#/$#) {
+	$has_dir = 1;
+	last;
+      }
+    }
+    # disable some items if not dir selecteted
+    unless ($has_dir) {
+      my @list = $menu->get_children;
+
+      for my $i (@list) {
+	my $ud = $i->get_property ('user-data');
+
+	if ($ud == 1) {		# for dirs only
+	  $i->set_sensitive (FALSE);
+	}
+      }
+    }
+    $menu->popup (undef, undef, undef, undef, 0, 0);
+  }
+
+  sub hide {
+    my @list = $menu->get_children;
+    for my $i (@list) {
+      $i->set_sensitive (TRUE);
+    }
+  }
 }
 # END Menu ###########################################################
 
