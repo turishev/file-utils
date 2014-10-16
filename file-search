@@ -409,10 +409,12 @@ sub rename_handler {
 
     if (! $res) { #ошибка
       show_msg ('error', text ("Rename error") . "$res\nfrom $old\n to $new");
-    }
-    else {
-      # $result_list->rename_file ($names[0]->{inx}, $entr->get_text);
-      $result_list->delete_items ($inx);
+    } else {
+      if ($new =~ $search_name{name}) {
+	$result_list->rename_file ($inx, $entr->get_text());
+      } else {
+	$result_list->delete_items ($inx);
+      }
     }
   }
   $dialog->destroy;
