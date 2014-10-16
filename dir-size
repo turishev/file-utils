@@ -24,7 +24,27 @@ my $file_manager = 'thunar';
 my $open_helper  = 'exo-open';
 my $main_title   = 'dir-size';
 
-our $VERSION = '1.03';
+# define key for action in form:
+# ctrl-x, ctrl-alt-x, ctrl-alt-shift-x, x
+# case-insensitive
+my @menu_actions = ({name    => 'dir-size',
+		     key     => 'Ctrl-f',
+                     test    => 'd',
+		     handler => \&dirsize_handler},
+		    {name    => 'Open',
+		     key     => 'Ctrl-w',
+		     handler => \&open_handler},
+		    {name    => 'Delete',
+		     key     => 'Ctrl-d',
+		     handler => \&delete_handler},
+		    {name    => 'Copy',
+		     key     => 'Ctrl-c',
+		     handler => \&clipboard_copy},
+		    {name    => 'Cut',
+		     key     => 'Ctrl-x',
+		     handler => \&clipboard_cut});
+
+our $VERSION = '1.04';
 
 my %opt;
 getopts ('d:v', \%opt);
@@ -39,16 +59,17 @@ my $list;
 
 my $icon_data;
 my $main_window;
-
-my $sum_size = 0;
-my $break_search;
-my $current_dir_size;
+my $menu;
 my $dir_label;
 my $stat_label;
 my $sum_label;
 my $info_label;
 my $sel_label;
+
 my $calc_dir = 0;
+my $sum_size = 0;
+my $break_search;
+my $current_dir_size;
 
 my $lang  = get_lang ();
 my %local_text;
@@ -111,13 +132,7 @@ sub create_window {
   $info_label->set_alignment (0,0.5);
   $box->pack_start ($info_label, FALSE, FALSE, 0);
 
-
-  my $menu = Menu::create ('dir-size', \&dirsize_handler,
-			   'Open',     \&open_handler,
-			   'Delete',   \&delete_handler,
-			   'Copy',     \&clipboard_copy,
-			   'Cut',      \&clipboard_cut,
-			   );
+  $menu = Menu::create (\@menu_actions);
 
   $list = Gtk2::SimpleList->new ('size' => 'text',
 				 'name' => 'text');
@@ -138,6 +153,8 @@ sub create_window {
   $list->get_model->set_sort_column_id (0,'descending');
 
   $list->signal_connect('button-press-event' => \&list_click_handler);
+  $list->signal_connect('key-press-event' => \&list_press_key);
+
   $list->get_selection()->signal_connect('changed' => \&show_selected);
 
   my $scroll = Gtk2::ScrolledWindow->new;
@@ -582,6 +599,41 @@ sub list_click_handler {
   return FALSE;# need handling in list
 }
 
+sub list_press_key {
+  my ($widget, $event, $parameter)= @_;
+  my $key_nr = $event->keyval();
+  my $key = Gtk2::Gdk->keyval_name ($key_nr);
+  my $modif =  $event->state();
+  #print "list press key:$key_nr,$key, modif:$modif\n";
+
+  if (lc ($key) eq 'menu') {# контекстное меню
+    $menu->popup(undef,undef,undef,undef,0,0);
+    # без этого меню не всплывает :
+    return TRUE;
+  }
+
+  if ($key_nr < 256) {# ignore ctrl alt shift esc ..
+    my $handler = get_key_handler($modif, $key);
+    &$handler if $handler;
+  }
+
+  return FALSE;
+}
+
+sub get_key_handler {
+  my ($modif, $key) = @_;
+  $key = ($modif & 'control-mask'? 'ctrl-':'')
+    . ($modif & 'mod1-mask'? 'alt-':'')
+      . ($modif & 'shift-mask'? 'shift-':'')
+	. lc ($key);
+  #print "key:$key\n";
+  for my $act (@menu_actions) {
+    if ($key eq lc ($act->{key})) {
+      return $act->{handler};
+    }
+  }
+  return undef;
+}
 
 #############################################################################
 # Clipboard
@@ -656,21 +708,23 @@ sub clear_func {
 ##############################################################################
 package Menu;
 use utf8;
-#use Data::Dumper;
 
 sub create {
+  my $descr = shift;
   my $menu = Gtk2::Menu->new;
 
-  $menu->append(Gtk2::TearoffMenuItem->new);
+  #$menu->append(Gtk2::TearoffMenuItem->new);
+
   my ($item, $name, $handler);
-  while ($name = shift) {
+
+  for my $d (@$descr) {
     $handler = shift;
-    if ($name =~ /^-+$/) {
+    if ($d->{name} =~ /^-+$/) {
       $item = Gtk2::SeparatorMenuItem->new();
     }
     else {
-      $item = Gtk2::MenuItem->new_with_label ($name);
-      $item->signal_connect ('activate' => $handler);
+      $item = Gtk2::MenuItem->new_with_label (::text($d->{name}) . "\t" . $d->{key});
+      $item->signal_connect ('activate' => $d->{handler});
     }
     $menu->append ($item);
   }
@@ -678,9 +732,10 @@ sub create {
   return $menu;
 }
 # END Menu ###########################################################
+
 package main;
 
-## localization #############################################################
+## localization ##
 sub get_lang {
   my ($x, $codepage) = split /\./, $ENV{LANG};
   my ($language, $country) = split /_/, $x;
