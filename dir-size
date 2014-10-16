@@ -182,7 +182,8 @@ sub create_window {
 
   #$sum_label->set_alignment (0,0.5);
   $hbox->pack_start ($sum_label, FALSE, FALSE, 0);
-  $stat_label = Gtk2::Label->new (" please start calculation");
+  #  $stat_label = Gtk2::Label->new (" please start calculation");
+  $stat_label = Gtk2::Label->new ();
   #$sum_label->set_alignment (0,0.5);
   $hbox->pack_start ($stat_label, FALSE, FALSE, 0);
 
@@ -193,18 +194,18 @@ sub create_window {
 
   $hbox = Gtk2::HBox->new();
 
-  $button = Gtk2::Button->new ("Calculate");
+  $button = Gtk2::Button->new (text ("Calculate"));
   $hbox->pack_start ($button, TRUE, TRUE, 0);
   $button->signal_connect (clicked => sub {show_info ('');
 					   start_search()},
 			   $main_window);
 
-  $button = Gtk2::Button->new ("Stop");
+  $button = Gtk2::Button->new (text ("Stop"));
   $hbox->pack_start ($button, TRUE, TRUE, 0);
   $button->signal_connect (clicked => \&on_stop_search,
 			   $main_window);
 
-  $button = Gtk2::Button->new ("Close");
+  $button = Gtk2::Button->new (text ("Close"));
   $hbox->pack_start ($button, TRUE, TRUE, 0);
   $button->signal_connect (clicked => sub {$break_search = 1;
 					   Gtk2->main_quit; return FALSE},
@@ -303,7 +304,7 @@ sub start_search {
     }
   }
   show_sum ();
-  $stat_label->set_text (' bites total');
+  $stat_label->set_text (' ' . text ('bites total'));
 }
 
 sub on_show_window {
@@ -817,5 +818,19 @@ WEqpLZ4JlqXoeN6LUgx099G/OhVrx6WrvMS+3XSmiiJb74ns6XSGoa+TLCw6r7XF/WCYTBZXrX6q
 gDbg6B61XgzoDIaJHf6S/TX2E+VC0Xp3ae8/AAAAAElFTkSuQmCC
 END_ICON
 
- %local_text = ();
+ %local_text = ('Open' => {ru => 'Открыть'},
+		'Copy' => {ru => 'Копировать'},
+		'Cut' => {ru => 'Вырезать'},
+		'Delete' => {ru => 'Удалить'},
+		'Help'  => {ru => 'Справка'},
+		'Close' => {ru => 'Закрыть'},
+		'Stop' => {ru => 'Прервать'},
+                'Calculate' => {ru => 'Вычислить'},
+		'regexp' => {ru => 'рег.выраж'},
+		'Delete file (dir, reqursive)?' => {ru => 'Удалить (рекусивно) файлы и каталоги?'},
+		'Delete file error' => {ru => 'Ошибка удаления файла'},
+		'Rename error' => {ru => 'Ошибка переименования файла'},
+		'Command' => {ru => 'Команда'},
+		'bites total' => {ru => 'всего байт'}
+	       );
 }
