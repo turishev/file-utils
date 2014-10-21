@@ -13,6 +13,7 @@ use Glib qw /TRUE FALSE/;
 use Gtk2 '-init';
 use File::Find;
 use File::Copy;
+use File::Spec;
 use MIME::Base64 qw(decode_base64);
 use URI::Escape;
 
@@ -59,12 +60,13 @@ my @menu_actions = ({name    => 'Open',
 		     key     => 'Ctrl-n',
 		     handler => \&rename_handler});
 
-our $VERSION = '1.03';
+our $VERSION = '1.04';
 
 ##### global var ######################################################
 
 my $icon_data;
 my $lang  = get_lang ();
+my $start_pwd = $ENV{PWD};
 my %local_text;
 my %help_text;
 
@@ -83,7 +85,7 @@ my $start_button;
 my $copy_to_dir= '';
 my $break_search;
 my (%search_name,  %search_time, %search_size,
-    @search_types, %search_text);
+    @search_types, %search_text, $search_dir);
 
 #########################################################################
 {
@@ -116,37 +118,32 @@ my (%search_name,  %search_time, %search_size,
 
   my $lb = Gtk2::Label->new (text ('file name'));
   $lb->set_alignment (0.0, 0.5);
-  $table->attach ($lb, 0, 2, 0, 1, ['fill'],['expand', 'fill'], 5, 0);
+  $table->attach ($lb, 0, 1, 0, 1, ['fill'],['expand', 'fill'], 5, 0);
 
   $name_box = Name_Box->new;
-  $table->attach_defaults ($name_box->box(), 2, 4, 0, 1);
+  $table->attach_defaults ($name_box->box, 1, 5, 0, 1);
 
   $lb = Gtk2::Label->new (text ('directory'));
   $lb->set_alignment(0.0, 0.5);
   $table->attach ($lb, 0, 1, 1, 2, ['fill'],['expand', 'fill'], 5, 0);
 
-  my $butt = Gtk2::Button->new (" ... ");
-  $butt->signal_connect (clicked => sub {$dir_box->dialog_run ()});
-  $table->attach ($butt, 1, 2, 1, 2, ['fill'],['expand', 'fill'], 5, 0);
-
-
   $dir_box = Dir_Box->new;
-  $table->attach_defaults ($dir_box, 2, 4, 1, 2);
+  $table->attach_defaults ($dir_box->box, 1, 5, 1, 2);
+
 
   $lb = Gtk2::Label->new (text ('modify time'));
   $lb->set_alignment (0.0, 0.5);
-  $table->attach ($lb, 0, 2, 2, 3, ['fill'],['expand', 'fill'], 5, 0);
-
+  $table->attach ($lb, 0, 1, 2, 3, ['fill'],['expand','fill'], 5, 0);
 
   $time_box = Time_Box->new;
-  $table->attach_defaults ($time_box->box, 2, 3, 2, 3);
+  $table->attach_defaults ($time_box->box, 1, 3, 2, 3);
 
   $size_box = Size_Box->new;
-  $table->attach_defaults ($size_box->box, 3, 4, 2, 3);
+  $table->attach_defaults ($size_box->box, 3, 5, 2, 3);
 
   $lb = Gtk2::Label->new (text ('file types'));
   $lb->set_alignment(0.0, 0.5);
-  $table->attach ($lb, 0, 2, 3, 4, ['fill'],['expand', 'fill'], 5, 0);
+  $table->attach ($lb, 0, 1, 3, 4, ['fill'],['expand', 'fill'], 5, 0);
 
   $type_box = Type_Box->new ('f','file',
 			     'd','dir',
@@ -156,15 +153,15 @@ my (%search_name,  %search_time, %search_size,
 			     'c','symbol',
 			     'b','block');
 
-  $table->attach_defaults ($type_box->box, 2, 4, 3, 4);
+  $table->attach_defaults ($type_box->box, 1, 5, 3, 4);
 
   $lb = Gtk2::Label->new(text ('text (regexp)'));
   $lb->set_alignment(0.0, 0.5);
-  $table->attach ($lb, 0, 2, 4, 5, ['fill'],['expand', 'fill'], 5, 0);
+  $table->attach ($lb, 0, 1, 4, 5, ['fill'],['expand', 'fill'], 5, 0);
 
   $grep_box = Grep_Box->new;
 
-  $table->attach_defaults ($grep_box->box, 2, 4, 4, 5);
+  $table->attach_defaults ($grep_box->box, 1, 5, 4, 5);
 
   Menu::create (\@menu_actions);
 
@@ -194,14 +191,14 @@ my (%search_name,  %search_time, %search_size,
   # кнопки управления
   my $hbox = Gtk2::HBox->new(TRUE);
   $start_button = Gtk2::Button->new (text ("Start"));
-  $start_button->signal_connect (clicked => \&on_start_search, $main_window);
+  $start_button->signal_connect (clicked => \&start_search, $main_window);
   $hbox->pack_start ($start_button, TRUE, TRUE, 0);
 
   $stop_button = Gtk2::Button->new (text ("Stop"));
-  $stop_button -> signal_connect (clicked => \&on_stop_search,  $main_window);
+  $stop_button -> signal_connect (clicked => \&stop_search,  $main_window);
   $hbox->pack_start ($stop_button, TRUE, TRUE, 0);
 
-  $butt = Gtk2::Button->new (text ("Reset"));
+  my $butt = Gtk2::Button->new (text ("Reset"));
   $butt->signal_connect (clicked => \&init_controls,  $main_window);
   $hbox->pack_start ($butt, TRUE, TRUE, 0);
 
@@ -693,7 +690,7 @@ sub check_file {
 }
 
 
-sub on_start_search {
+sub start_search {
   $name_box->text_to_list;
   $dir_box->text_to_list;
   $grep_box->text_to_list;
@@ -751,10 +748,13 @@ sub on_start_search {
   $stop_button->set_sensitive (1);
   $start_button->set_sensitive (0);
 
+  $search_dir = canon_file_path ($dir_box->get);
+  $dir_box->set ($search_dir);
+
   eval {
     find ({wanted => \&check_file,
 	   follow => 0},
-	  encode ('utf8', $dir_box->get));
+	  encode ('utf8', $search_dir));
   };
   if ($@) {
     carp "error search: $@" if $@ !~ /break search/;
@@ -763,11 +763,13 @@ sub on_start_search {
    $main_window->set_title ($main_title .':'. $result_list->row_count()
    			   . ($break_search ? ' (aborted)' : ''));
 
+  chdir $start_pwd; #when error occured need set pwd
+
   $stop_button->set_sensitive (0);
   $start_button->set_sensitive (1);
 }
 
-sub on_stop_search {
+sub stop_search {
   $break_search = 1;
   $stop_button->set_sensitive (0);
   $start_button->set_sensitive (1);
@@ -859,7 +861,7 @@ sub window_press_key {
   my $modif =  $event->state();
   #  print STDERR "press_key: $key_nr, $modif\n";
   if ($key_nr ==  0xff0d) {
-    on_start_search();
+    start_search();
     return TRUE;
   }
   return FALSE;
@@ -1007,15 +1009,6 @@ sub home {
   return $str;
 }
 
-# замена ./ текущим  каталогом
-sub pwd {
-  my $str = shift;
-  if ($str =~ /^\.\//) {
-    $str =~ s/^\./$ENV{PWD}/e;
-  }
-  return $str;
-}
-
 # замена переменной окружения $XXX её значением
 sub envar {
   my $str = shift;
@@ -1026,6 +1019,12 @@ sub envar {
     $str =~ s/^\$.+\//$ENV{$var}/e;
   }
   return $str;
+}
+
+sub canon_file_path {
+   my $str = shift;
+   $str = envar (home (rm_sp ($str)));
+   return File::Spec->rel2abs ($str);
 }
 
 ######################################################################
@@ -1658,9 +1657,16 @@ BEGIN {
 
 sub new {
   my $class = shift;
-  my $self = {};
-  $self = EntryX->new;
+  my $self = EntryX->new;
   bless ($self, $class);
+
+  my $hbox = Gtk2::HBox->new;
+  $self->{box} = $hbox;
+  $hbox->pack_start ($self, TRUE, TRUE, 0);
+
+  my $butt = Gtk2::Button->new (" ... ");
+  $hbox->pack_start ($butt, FALSE, FALSE, 0);
+  $butt->signal_connect (clicked => sub {$dir_box->dialog_run ()});
   return  $self;
 }
 
@@ -1690,15 +1696,18 @@ sub dialog_run {
 
 sub get {
   my $self = shift;
-  my $path = ::envar (::pwd (::home (::rm_sp ($self->child->get_text))));
-  set ($self, $path);
-  return $path;
+  return $self->child->get_text;
 }
 
 sub set {
   my ($self, $str) = @_;
   $self->child->set_text ($str);
 }
+
+sub box {
+  return shift->{box};
+}
+
 # END Dir_Box ########################################################
 
 package main;
@@ -1790,6 +1799,11 @@ END_ICON
 "При установке флажка 'рег.выраж' использовать синтаксис регулярных выражений Perl, "
 . "в противном случае, простое совпадение части имени с образцом.
 Флажок 'учёт регистра' в обоих случаях требует совпадения также и с регистром символов шаблона."
+		       },
+		       {title =>'Каталог',
+			text  =>
+"В строке ввода каталога можно использовать переменные окружения (напр. \$HOME),"
+. "~/ - синоним \$HOME, и относительнеые пути (напр. ./ - текущий каталог)."
 		       },
 
 		       {title => 'Время изменения файла',
