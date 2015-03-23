@@ -1150,6 +1150,13 @@ sub operation_do {
   start_compare();
 }
 
+sub files_uri {
+  my @res;
+  map {push @res,  'file://' . uri_escape ($_, q( ?<>{}#%`;"))} @_;
+  #print "uri:@res\n";
+  return @res;
+}
+
 sub open_with {
   my ($letter, @cmd) = @_;
   my $dir = ($letter eq 'a' ? $start_dir_a : $start_dir_b);
@@ -1169,7 +1176,7 @@ sub open_with {
   if (-f $name) {
     if (not fork) {
       print STDERR "open:@cmd $name\n";
-      exec (@cmd, $name);
+      exec (@cmd, files_uri ($name));
     }
   }
   else {
@@ -1629,7 +1636,7 @@ sub get_func {
   # и другие символы, минимум это - " #%"
   # аналогично g_file_new_for_path
 
-  map {$namestr .= 'file://' . uri_escape ($_, q( ?<>{}#%`;")) . "\n"} @$names;
+  $namestr = join "\n", files_uri (@$names);
   # print "info:$info;names:'$namestr'\n";
 
   if ($info == 1) {

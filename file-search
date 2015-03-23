@@ -364,7 +364,8 @@ sub open_handler {
   #print  "open:", $result_list->selected_names, "\n";
   my $pid;
   if (not $pid = fork) {
-    exec ($open_helper, $result_list->selected_names);
+    exec ($open_helper,
+	  files_uri ($result_list->selected_names));
   }
 }
 
@@ -853,6 +854,13 @@ sub rdev_format {
                   $_[0] & 0xff;
 }
 
+sub files_uri {
+  my @res;
+  map {push @res,  'file://' . uri_escape ($_, q( ?<>{}#%`;"))} @_;
+  #print "uri:@res\n";
+  return @res;
+}
+
 ######################################################################
 # обработка клавиатуры
 sub window_press_key {
@@ -970,8 +978,8 @@ sub get_func {
   # и другие символы, минимум это - " #%"
   # аналогично g_file_new_for_path
 
-  map {$namestr .= 'file://' . uri_escape ($_, q( ?<>{}#%`;")) . "\n"} @$names;
-  # print "info:$info;names:'$namestr'\n";
+  $namestr = join "\n", files_uri (@$names);
+  #print "info:$info;names:'$namestr'\n";
 
   if ($info == 1) {
     $selectiondata->set ($selectiondata->target(), 8, join ("\n", @$names));

@@ -453,6 +453,13 @@ sub name_str {
   return $namestr;
 }
 
+sub files_uri {
+  my @res;
+  map {push @res,  'file://' . uri_escape ($_, q( ?<>{}#%`;"))} @_;
+  #print "uri:@res\n";
+  return @res;
+}
+
 sub selected_inx {
   my @sel = $list->get_selected_indices;
   return @sel;
@@ -532,7 +539,8 @@ sub show_selected {
 sub open_handler {
   my $pid;
   if (not $pid = fork()) {
-    exec ($open_helper, selected_files ());
+#    exec ($open_helper, selected_files ());
+    exec ($open_helper, files_uri (selected_files ()));
   }
 }
 
@@ -684,7 +692,8 @@ sub get_func {
   # нужно экранировать пробелы (хвостовые в первую очередь)
   # и другие символы, минимум это - " #%"
   # аналогично g_file_new_for_path
-  map {$namestr .= 'file://' . uri_escape ($_, q( ?<>{}#%`;")) . "\n"} @$names;
+
+  $namestr = join "\n", files_uri (@$names);
   #print "info:$info;names:'$namestr'\n";
 
   if ($info == 1) {
