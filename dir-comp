@@ -146,15 +146,8 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 	  and $row <= $save_selection[$#save_selection]) {
 
 	for my $i (@save_selection) {
-	  my $dtype = $list->{data}->[$i]->[$clm{diff}];
-	  #print $list->{data}->[$i]->[0], "$dtype\n";
-
-	  if (($dtype ne 'B' or $col != $clm{a_cp} and $col != $clm{a_del})
-	      and
-	      ($dtype ne 'A' or $col != $clm{b_cp} and $col != $clm{b_del})){
+	  if (col_visible ($i, $col))   {
 	    $list->{data}->[$i]->[$col] = $val;
-	    #$list->{data}->[$i]->[$col] = ! ($list->{data}->[$i]->[$col]);
-	    # проствляем selected ТОЛЬКО ЕСЛИ ВИДИМЫ
 	  }
 	}
       }
@@ -256,6 +249,35 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 
   sub box {
     return $scroll;
+  }
+
+  sub col_visible {
+    my ($row, $col) = @_;
+    my $dtype = $list->{data}->[$row]->[$clm{diff}];
+    return ($dtype ne 'B' or $col != $clm{'a_cp'} and $col != $clm{a_del})
+       	  and
+       	  ($dtype ne 'A' or $col != $clm{b_cp} and $col != $clm{b_del});
+  }
+
+  sub set_checks_for_dir {
+    my $path = shift;
+    my @checks = @_;
+
+    for (my $i = 0; $i <= $#{$list->{data}}; $i++) {
+      if ($list->{data}->[$i]->[$clm{name}] =~ /^$path/ ) {
+	print $list->{data}->[$i]->[$clm{name}],  "\n";
+
+        for my $c ('a_cp', 'a_del', 'b_cp', 'b_del') {
+	  $list->{data}->[$i]->[$clm{$c}] = FALSE;
+	}
+
+        for my $c (@checks) {
+	  if (col_visible ($i, $clm{$c})) {
+	    $list->{data}->[$i]->[$clm{$c}] = TRUE;
+	  }
+	}
+      }
+    }
   }
 }
 
@@ -778,7 +800,10 @@ sub create_window {
 
   # bit flags for control  menu item show
   # 1- need A, 2 - need B, 4 - local (not sftp) files
-  my $menu = Menu::create ({caption=> 'Open A',
+  my $menu = Menu::create ({caption => 'Select files in dir',
+			    handler => \&select_files_in_dir,
+			    opt => 0},
+			   {caption=> 'Open A',
                             handler => sub {open_handler('a')},
                             opt => 1},
 			   {caption=> 'Open B',
@@ -1279,6 +1304,93 @@ sub diff_files {
   close $fh;
   $out ? show_text ($out, "diff:$row{name}")
     : show_msg ('info', text ('no differece found'));
+}
+
+sub select_files_in_dir {
+  my $file = Result_List::selected_name ();
+  print "select_files_in_dir:$file\n";
+  my @path = split '/', $file;
+  pop @path; # remove file name
+
+  my $dialog = Gtk2::Dialog->new (::text ("Directory synchronization"),
+  				  $main_window,
+  				  ['modal', 'destroy-with-parent'],
+				  'gtk-cancel' => 'cancel',
+                                  'gtk-ok' => 'ok');
+  my $mainbox = Gtk2::VBox->new (FALSE, 20);
+  $dialog->vbox->add ($mainbox);
+
+
+  my $dir_entr = Gtk2::ComboBox->new_text;
+  $mainbox->pack_start ($dir_entr, FALSE, FALSE, 0);
+
+  my $hbox  = Gtk2::HBox->new ();
+  $mainbox->pack_start ($hbox, FALSE, FALSE, 0);
+
+  my $pp = '';
+  for my $p (@path) {
+    $pp .= ($pp ? '/':'') . $p;
+    $dir_entr->prepend_text ($pp);
+  }
+  $dir_entr->set_active (0);
+
+
+  my %chk = (a_del  => 'del A',
+	     b_del  => 'del B',
+	     a_cp   => 'A->B',
+	     b_cp   => 'B->A');
+  my $bt;
+  for my $n ('a_cp',  'a_del', 'b_cp', 'b_del') {
+    $bt = Gtk2::CheckButton->new ($chk{$n});
+    $hbox->pack_start ($bt, FALSE, FALSE, 0);
+    $chk{$n} = $bt;
+  }
+
+  $chk{'a_cp'}->signal_connect
+    (toggled =>
+     sub {
+       if ($chk{'a_cp'}->get_active) {
+	 $chk{'b_cp'}->set_active (FALSE);
+	 $chk{'b_del'}->set_active (FALSE);
+       }
+     });
+  $chk{'b_cp'}->signal_connect
+    (toggled =>
+     sub {
+       if ($chk{'b_cp'}->get_active) {
+	 $chk{'a_cp'}->set_active (FALSE);
+	 $chk{'a_del'}->set_active (FALSE);
+       }
+     });
+  $chk{'a_del'}->signal_connect
+    (toggled =>
+     sub {
+       if ($chk{'a_del'}->get_active) {
+	 $chk{'b_cp'}->set_active (FALSE);
+       }
+     });
+  $chk{'b_del'}->signal_connect
+    (toggled =>
+     sub {
+       if ($chk{'b_del'}->get_active) {
+	 $chk{'a_cp'}->set_active (FALSE);
+       }
+     });
+
+  $dialog->show_all;
+  my $response = $dialog->run;
+
+  $dialog->destroy;
+
+  if ($response eq 'ok') {
+    my $path =  $dir_entr->get_active_text;
+    my @checks;
+    for my $k (keys %chk) {
+      push @checks, $k if $chk{$k}->get_active;
+    }
+    print "set checks:$path @checks\n";
+    Result_List::set_checks_for_dir ($path, @checks)
+  }
 }
 
 sub gui_upd {
