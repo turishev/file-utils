@@ -28,7 +28,7 @@ my $main_title = 'file-search';
 my %default = (name                => '',
                name_use_regexp     => 1,
 	       name_case_sensitive => 0,
-               directory => $ENV{PWD},
+               directory => decode ('utf-8', $ENV{PWD}),
                text_case_sensitive => 0);
 
 
@@ -66,7 +66,7 @@ our $VERSION = '1.04';
 
 my $icon_data;
 my $lang  = get_lang ();
-my $start_pwd = $ENV{PWD};
+my $start_pwd = decode ('utf-8', $ENV{PWD});
 my %local_text;
 my %help_text;
 
@@ -578,9 +578,9 @@ sub exec_handler {
     my $file = $i->{file};
     my $path =  "$dir/$file";
 
-    $ENV{p} = $path;
-    $ENV{f} = $file;
-    $ENV{d} = $dir;
+    $ENV{p} = encode ('utf-8', $path);
+    $ENV{f} = encode ('utf-8', $file);
+    $ENV{d} = encode ('utf-8', $dir);
 
     my ($pid, @proc);
 
@@ -1012,7 +1012,7 @@ sub rm_sp {
 sub home {
   my $str = shift;
   if ($str =~ /^~\//) {
-    $str =~ s/^~/$ENV{HOME}/e;
+    $str =~ s/^~/decode ('utf-8', $ENV{HOME})/e;
   }
   return $str;
 }
@@ -1024,7 +1024,7 @@ sub envar {
     my $var = $&;
     $var =~ s/\/$//;
     $var =~ s/^\$//;
-    $str =~ s/^\$.+\//$ENV{$var}/e;
+    $str =~ s/^\$.+\//decode ('utf-8', $ENV{$var})/e;
   }
   return $str;
 }

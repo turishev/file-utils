@@ -382,7 +382,7 @@ sub del_list {
 
 sub path_to_name {
   my $path = shift;
-  $path =~ s#$base_dir/##;
+  $path =~ s#\Q$base_dir\E/##;
   return $path;
 }
 

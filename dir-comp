@@ -264,7 +264,7 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     my @checks = @_;
 
     for (my $i = 0; $i <= $#{$list->{data}}; $i++) {
-      if ($list->{data}->[$i]->[$clm{name}] =~ /^$path/ ) {
+      if ($list->{data}->[$i]->[$clm{name}] =~ /^\Q$path\E/ ) {
 	print $list->{data}->[$i]->[$clm{name}],  "\n";
 
         for my $c ('a_cp', 'a_del', 'b_cp', 'b_del') {
@@ -936,8 +936,8 @@ sub show_text {
 
 sub init_controls {
   Result_List::clear();
-  $dir_box_a ->set($ENV{PWD});
-  $dir_box_b ->set($ENV{PWD});
+  $dir_box_a->set(decode ('utf-8', $ENV{PWD}));
+  $dir_box_b->set(decode ('utf-8', $ENV{PWD}));
   $dir_box_a->focus;
 }
 
@@ -1407,7 +1407,8 @@ sub create_local_path_list {
             die if $break_oper;
             return if /^\.\.?$/;
             my $path = decode ('utf8', $File::Find::name);
-            my ($dir, $p) = ($path =~ /($start_dir\/)(.+)/);
+
+            my ($dir, $p) = ($path =~ /(\Q$start_dir\E\/)(.+)/);
             my %attr = get_file_info ($path);
             $res->{$p} = {%attr} if $attr{type} eq 'file';
             gui_upd (), $cnt = 0 if $cnt++ >= 20;
@@ -1443,7 +1444,7 @@ sub create_sftp_path_list {
                    die if $break_oper;
 		   my $f = $_[1];
 		   my $n = $f->{filename};
-		   my ($dir, $p) = ($n =~ /($start_dir\/)(.+)/);
+		   my ($dir, $p) = ($n =~ /(\Q$start_dir\E\/)(.+)/);
 		   return if ! $p;
 		   # name(relative path) => attributes
 		   my $type = file_type_format ($f->{a}->perm);
@@ -1784,7 +1785,7 @@ sub rm_sp {
 sub home {
   my $str = shift;
   if ($str =~ /^~\//) {
-    $str =~ s/^~/$ENV{HOME}/e;
+    $str =~ s/^~/decode ('utf-8', $ENV{HOME})/e;
   }
   return $str;
 }
@@ -1793,7 +1794,7 @@ sub home {
 sub pwd {
   my $str = shift;
   if ($str =~ /^\.\//) {
-    $str =~ s/^\./$ENV{PWD}/e;
+    $str =~ s/^\./decode ('utf-8', $ENV{PWD})/e;
   }
   return $str;
 }
@@ -1805,7 +1806,7 @@ sub envar {
     my $var = $&;
     $var =~ s/\/$//;
     $var =~ s/^\$//;
-    $str =~ s/^\$.+\//$ENV{$var}/e;
+    $str =~ s/^\$.+\//decode ('utf-8', $ENV{$var})/e;
   }
   return $str;
 }
