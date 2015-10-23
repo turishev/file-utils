@@ -264,9 +264,10 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     my @checks = @_;
 
     for (my $i = 0; $i <= $#{$list->{data}}; $i++) {
-      if ($list->{data}->[$i]->[$clm{name}] =~ /^\Q$path\E/ ) {
-	print $list->{data}->[$i]->[$clm{name}],  "\n";
+      my $p = substr $list->{data}->[$i]->[$clm{name}], 0, length $path;
 
+      if ($p eq $path) {
+	#print $list->{data}->[$i]->[$clm{name}],  "\n";
         for my $c ('a_cp', 'a_del', 'b_cp', 'b_del') {
 	  $list->{data}->[$i]->[$clm{$c}] = FALSE;
 	}
@@ -1257,7 +1258,7 @@ sub copy_to_dlg {
   if ($response eq 'ok') {
     my $src = ($letter eq 'a'? $start_dir_a: $start_dir_b)
                 . '/'. $name;
-    print "copy to:$src->$dst\n";
+    #print "copy to:$src->$dst\n";
 
     if ($sftp_a and $letter eq 'a') {#copy from sftp to local
       my $err = check_path ($dst);
@@ -1407,8 +1408,7 @@ sub create_local_path_list {
             die if $break_oper;
             return if /^\.\.?$/;
             my $path = decode ('utf8', $File::Find::name);
-
-            my ($dir, $p) = ($path =~ /(\Q$start_dir\E\/)(.+)/);
+	    my $p = substr $path, length $start_dir;
             my %attr = get_file_info ($path);
             $res->{$p} = {%attr} if $attr{type} eq 'file';
             gui_upd (), $cnt = 0 if $cnt++ >= 20;
@@ -1444,8 +1444,10 @@ sub create_sftp_path_list {
                    die if $break_oper;
 		   my $f = $_[1];
 		   my $n = $f->{filename};
-		   my ($dir, $p) = ($n =~ /(\Q$start_dir\E\/)(.+)/);
+		   my $p = substr $n, length $start_dir;
+
 		   return if ! $p;
+
 		   # name(relative path) => attributes
 		   my $type = file_type_format ($f->{a}->perm);
 		   $res->{$p} = {type  => $type,
