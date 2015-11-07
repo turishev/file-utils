@@ -1,0 +1,21 @@
+File utilities for light-weight desktop
+
+This is GUI file utilities for light-weight Linux (UNIX) desktops like XFCE, LXDE etc.
+developed using GTK2-Perl.
+
+file-search
+   searching for files by name (with regular expression or simple substring matches),
+   modification time, size, file type or content matches;
+   executing with found files operation as: open, copy, move, rename, delete or any custom command.
+   
+dir-size
+   calculation sum of file sizes in directory (or selected files) and manage files (copy, cut, delete).
+   Also you can call dir-size recursive for nested directories to check and manage disk space.
+   
+dir-comp
+  Compare content of two directories (local or remote, using SFTP) and synchronize them with full manual control. 
+
+Localization
+
+   Utilities work correctly with UTF-8 (and ASCII) locale encoding.
+   User interface - russian for ru_RU.UTF-8 and english for others.
