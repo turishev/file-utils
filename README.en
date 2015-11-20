@@ -18,4 +18,6 @@ dir-comp
 Localization
 
    Utilities work correctly with UTF-8 (and ASCII) locale encoding.
-   User interface - russian for ru_RU.UTF-8 and english for others.
+   User interface - russian for ru_RU.UTF-8 locale and english for others.
+
+description (russian) and screenshots http://turishev.ru/cgi-bin/book.pl?name=soft/file_utils
