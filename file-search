@@ -14,19 +14,18 @@ use Gtk2 '-init';
 use File::Find;
 use File::Copy;
 use File::Spec;
+use Text::Glob 'glob_to_regex';
 use MIME::Base64 qw(decode_base64);
 use URI::Escape;
 
 use strict;
-#no warnings "experimental::smartmatch";
 
 my $file_manager="thunar";
 my $editor="leafpad";
 my $open_helper = 'exo-open';
 my $main_title = 'file-search';
 
-my %default = (name                => '',
-               name_use_regexp     => 1,
+my %default = (name_mode           => 'glob', # glob, regexp, simple
 	       name_case_sensitive => 0,
                directory => decode ('utf-8', $ENV{PWD}),
                text_case_sensitive => 0);
@@ -60,7 +59,7 @@ my @menu_actions = ({name    => 'Open',
 		     key     => 'Ctrl-n',
 		     handler => \&rename_handler});
 
-our $VERSION = '1.04';
+our $VERSION = '1.05';
 
 ##### global var ######################################################
 
@@ -130,7 +129,7 @@ my (%search_name,  %search_time, %search_size,
   $dir_box = Dir_Box->new;
   $table->attach_defaults ($dir_box->box, 1, 5, 1, 2);
 
-  
+
   $lb = Gtk2::Label->new (text ('modify time'));
   $lb->set_alignment (0.0, 0.5);
   $table->attach ($lb, 0, 1, 2, 3, ['fill'],['expand','fill'], 5, 0);
@@ -287,7 +286,7 @@ sub show_help {
 sub init_controls {
   $dir_box->set ($default{directory});
   $name_box->grab_focus;
-  $name_box->set ($default{name}, $default{name_use_regexp}, $default{name_case_sensitive});
+  $name_box->init ($default{name_mode}, $default{name_case_sensitive});
   $name_box->set_pos (1);
   $size_box->init;
   $time_box->init;
@@ -615,7 +614,8 @@ sub test_file {
 
   my $res;
 
-  if ($search_name{regexp}) {$res = $name =~ $search_name{name}}
+  if ($search_name{name} eq '') {$res = 1}
+  elsif ($search_name{mode} eq 'regexp') {$res = $name =~ $search_name{name}}
   elsif ($search_name{case}) { $res = (index ($name, $search_name{name}) > -1)}
   else { $res = (index (lc ($name), $search_name{name}) > -1)}
 
@@ -708,17 +708,22 @@ sub start_search {
 
   %search_name = $name_box->get;
 
-  if ($search_name{regexp}) {
-    if ($search_name{case}) {
-      $search_name{name} = eval {qr/$search_name{name}/} || print STDERR "regexp error";
-    }
-    else     {
-      $search_name{name} = eval {qr/$search_name{name}/i} || print STDERR "regexp error";
-    }
-  }
-  else {
-    if (! $search_name{case}) {
-      $search_name{name} = lc $search_name{name};
+  if ($search_name{name} ne '') {
+    if ($search_name{mode} eq 'regexp') {
+      if ($search_name{case}) {
+	$search_name{name} = eval {qr/\Q$search_name{name}\E/} || print STDERR "regexp error";
+      } else {
+	$search_name{name} = eval {qr/\Q$search_name{name}\E/i} || print STDERR "regexp error";
+      }
+    } elsif ($search_name{mode} eq 'glob') {
+      $search_name{name} = '*' if $search_name{name} eq '';
+      $search_name{name} = glob_to_regex ($search_name{name});
+      $search_name{mode} = 'regexp';
+      #print "glob:$search_name{name}\n";
+    } else {# search_name{mode} = 'simple'
+      if (! $search_name{case}) {
+	$search_name{name} = lc $search_name{name};
+      }
     }
   }
 
@@ -1305,7 +1310,6 @@ sub box {
   return $self->{box};
 }
 
-
 sub sort_int
 {
   my $col_num = pop;
@@ -1336,34 +1340,54 @@ sub new {
 
   $hbox->pack_start ($self, TRUE, TRUE, 0);
 
-  my $regexp_cb = Gtk2::CheckButton->new (::text ("regexp"));
-  $regexp_cb->set_active (TRUE);
-  $hbox->pack_start ($regexp_cb, FALSE, FALSE, 0);
+  my $mode = Gtk2::ComboBox->new_text;
+  $mode->append_text ('glob');
+  $mode->append_text ('regexp');
+  $mode->append_text ('simple');
+  $mode->set_size_request (64, -1);
+  $hbox->pack_start ($mode, FALSE, FALSE, 0);
 
   my $case_cb = Gtk2::CheckButton->new (::text ("case-sensitive"));
   $case_cb->set_active (FALSE);
   $hbox->pack_start ($case_cb, FALSE, FALSE, 0);
 
+  $mode->signal_connect ('changed' =>
+			 sub {$case_cb->sensitive($mode->get_active != 0);
+			      $case_cb->set_active(1) if $mode->get_active == 0});
+
   $self->{case} = $case_cb;
-  $self->{regexp} = $regexp_cb;
   $self->{box} = $hbox;
+  $self->{mode} = $mode;
   bless ($self, $class);
   return  $self;
 }
 
 sub get {
   my $self = shift;
+  my $a = $self->{mode}->get_active;
+  my $mode = ($a == 0?'glob':($a == 1?'regexp':'simple'));
   return (name   => $self->child->get_text,
-	  regexp => $self->{regexp}->get_active,
+	  mode   => $mode,
 	  case   => $self->{case}->get_active);
 }
 
-sub set {
-  my ($self, $str, $regexp, $case) = @_;
-  $self->child->set_text ($str);
-  $self->child->set_position (length $str);
-  $self->{regexp}->set_active ($regexp);
+sub init {
+  my ($self, $mode, $case) = @_;
+
+  $self->child->set_text ('*') if ($mode eq 'glob');
+  #$self->child->set_position (length $name);
+  if ($mode eq 'glob') {
+    $self->{case}->sensitive (0);
+    $self->{case}->set_active (0);
+  } else {
+    $self->{case}->sensitive (1);
+    $self->{case}->set_active ($case);
+  }
+
   $self->{case}->set_active ($case);
+  $self->{mode}->set_active (0) if $mode eq 'glob';
+  $self->{mode}->set_active (1) if $mode eq 'regexp';
+  $self->{mode}->set_active (2) if $mode eq 'simple';
 }
 
 sub set_pos {
@@ -1823,7 +1847,8 @@ END_ICON
 		  'Delete file error' => {ru => 'Ошибка удаления файла'},
 		  'Rename error' => {ru => 'Ошибка переименования файла'},
 		  'Command' => {ru => 'Команда'},
-		 'Execute' => {ru => 'Выполнить'},
+		  'Execute' => {ru => 'Выполнить'},
+		  'depth' => {ru => 'глубина'}
 		 );
 
   %help_text = (en => [
@@ -1836,14 +1861,14 @@ END_ICON
 		ru => [
 		       {title =>'Имя файла',
 			text  =>
-"При установке флажка 'рег.выраж' использовать синтаксис регулярных выражений Perl, "
-. "в противном случае, простое совпадение части имени с образцом.
-Флажок 'учёт регистра' в обоих случаях требует совпадения также и с регистром символов шаблона."
+"Пустая строка в имени файла означает совпадение с любым именем (во всех режимах). \nВыпадающий список режима позволяет выбрать режим поиска - glob (шаблон по типу шелл), regexp (синтаксис регулярных выражений Perl) или simple (простое совпадение с текстом)."
+. "\nФлажок 'учёт регистра' требует совпадения также и с регистром символов шаблона."
 		       },
 		       {title =>'Каталог',
 			text  =>
 "В строке ввода каталога можно использовать переменные окружения (напр. \$HOME),"
-. "~/ - синоним \$HOME, и относительнеые пути (напр. ./ - текущий каталог)."
+			. "~/ - синоним \$HOME, и относительные пути (напр. ./ - текущий каталог)."
+. "\nОпция 'глубина' (1  и более) ограничивает глубину поиска. Может использовать для выбора (и последующего копирования, перемещения, ..) файлов в текущем каталоге по шаблону."
 		       },
 
 		       {title => 'Время изменения файла',
