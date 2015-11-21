@@ -85,7 +85,7 @@ my $start_button;
 my $copy_to_dir= '';
 my $break_search;
 my (%search_name,  %search_time, %search_size,
-    @search_types, %search_text, $search_dir);
+    @search_types, %search_text, $search_dir, $search_depth);
 
 #########################################################################
 {
@@ -113,7 +113,7 @@ my (%search_name,  %search_time, %search_size,
 
   my $mainbox = Gtk2::VBox->new ();
 
-  my $table = Gtk2::Table->new (5, 4, FALSE);
+  my $table = Gtk2::Table->new (5, 4, TRUE);
   $mainbox->pack_start ($table, FALSE, FALSE, 0);
 
   my $lb = Gtk2::Label->new (text ('file name'));
@@ -130,7 +130,7 @@ my (%search_name,  %search_time, %search_size,
   $dir_box = Dir_Box->new;
   $table->attach_defaults ($dir_box->box, 1, 5, 1, 2);
 
-
+  
   $lb = Gtk2::Label->new (text ('modify time'));
   $lb->set_alignment (0.0, 0.5);
   $table->attach ($lb, 0, 1, 2, 3, ['fill'],['expand','fill'], 5, 0);
@@ -148,12 +148,13 @@ my (%search_name,  %search_time, %search_size,
   $type_box = Type_Box->new ('f','file',
 			     'd','dir',
 			     'l','link',
-			     's','socket',
+			     's','sock',
 			     'p','pipe',
-			     'c','symbol',
+			     'c','char',
 			     'b','block');
 
   $table->attach_defaults ($type_box->box, 1, 5, 3, 4);
+
 
   $lb = Gtk2::Label->new(text ('text (regexp)'));
   $lb->set_alignment(0.0, 0.5);
@@ -595,7 +596,14 @@ sub exec_handler {
 ###########################################################################
 my $found_counter = 0;
 
-sub check_file {
+sub test_depth {
+  my $depth = $File::Find::dir =~ tr[/][];
+  #print "$File::Find::dir, d:$depth\n";
+  if ($depth <= $search_depth) {return @_};
+  return;
+}
+
+sub test_file {
   die "break search" if $break_search;
 
   my $name = decode ('utf8', $_);
@@ -749,11 +757,22 @@ sub start_search {
   $stop_button->set_sensitive (1);
   $start_button->set_sensitive (0);
 
+
   $search_dir = canon_file_path ($dir_box->get);
   $dir_box->set ($search_dir);
 
+  my $dp = $dir_box->get_depth();
+
+  if ($dp ne '' and $dp =~ /\d+/ and $dp >= 1) {
+    #глубина поиска = глубина $search_dir + указанное значение - 1
+    $search_depth = $search_dir =~ tr[/][] + $dp - 1;
+  } else {
+    $search_depth = undef;
+  }
+
   eval {
-    find ({wanted => \&check_file,
+    find ({preprocess => ($search_depth? \&test_depth : undef),
+	   wanted => \&test_file,
 	   follow => 0},
 	  encode ('utf8', $search_dir));
   };
@@ -1675,6 +1694,14 @@ sub new {
   my $butt = Gtk2::Button->new (" ... ");
   $hbox->pack_start ($butt, FALSE, FALSE, 0);
   $butt->signal_connect (clicked => sub {$dir_box->dialog_run ()});
+
+  my $label = Gtk2::Label->new (::text ('depth') . ':');
+  $hbox -> pack_start ($label, FALSE, FALSE, 0);
+  my $entry = Gtk2::Entry->new;
+  $hbox -> pack_start ($entry, FALSE, FALSE, 0);
+  $entry->set_size_request (32);
+  $self->{depth_entry} = $entry;
+
   return  $self;
 }
 
@@ -1710,6 +1737,11 @@ sub get {
 sub set {
   my ($self, $str) = @_;
   $self->child->set_text ($str);
+}
+
+sub get_depth {
+  my $self = shift;
+  return $self->{depth_entry}->get_text;
 }
 
 sub box {
