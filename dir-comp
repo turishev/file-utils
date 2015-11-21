@@ -4,731 +4,152 @@
 # This file is licensed under the GNU General Public License version 3
 # or any later version.
 #######################################################################
+use strict;
+use warnings;
 
-my $main_title  = 'dir-comp';
-my $open_helper = 'exo-open';
-my $editor      = 'leafpad';
-
-our $VERSION='1.01';
-
-show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
-
-#######################################################################
-{
-  package Result_List;
-
-  use utf8;
-  use Glib qw/TRUE FALSE/;
-  use Gtk2::SimpleList;
-  use File::Basename;
-
-  my @clmns = ({id=>'name',    caption=>::text ('name'),  type=>'text', align=> 0},
-	       {id=>'diff',    caption=>::text ('diff'),  type=>'text', align=> 0.5},
-	       {id=>'a_cp',    caption=>'A->B',  type=>'bool', align=> 0.5},
-	       {id=>'a_del',   caption=>'del A', type=>'bool', align=> 0.5},
-	       {id=>'b_cp',    caption=>'B->A',  type=>'bool', align=> 0.5},
-	       {id=>'b_del',   caption=>'del B', type=>'bool', align=> 0.5},
-	       {id=>'size_a',  caption=>::text ('size A'),type=>'text', align=> 1},
-	       {id=>'size_b',  caption=>::text ('size B'),type=>'text', align=> 1},
-	       {id=>'time_a',  caption=>::text ('time A'),type=>'text', align=> 0},
-	       {id=>'time_b',  caption=>::text ('time B'),type=>'text', align=> 0},
-	       {id=>'perm_a',  caption=>::text ('perm A'),type=>'text', align=> 0},
-	       {id=>'perm_b',  caption=>::text ('perm B'),type=>'text', align=> 0},
-	       {id=>'owner_a', caption=>::text ('own A'), type=>'text', align=> 0},
-	       {id=>'owner_b', caption=>::text ('own B'), type=>'text', align=> 0});
-
-  my %clm; # index columns numbers on id
-  for (my $i = 0; $i <= $#clmns; $i++) {
-    $clm{$clmns[$i]{id}} = $i;
-  }
-
-  my $list;
-  my $scroll;
-  my @save_selection;
-
-  $list = Gtk2::SimpleList->new (map {($_->{caption}, $_->{type})} @clmns);
-  #$list->signal_connect('' => \&Result_List::list_click_hnd);
-
-  for (my $i = 0; $i <= $#clmns; $i++) {
-    my $clm = $list -> get_column ($i);
-    $clm->set_clickable(TRUE);
-    $clm->set_resizable(TRUE);
-    $clm->set_sort_column_id($i);
-
-    $clm->signal_connect('clicked', Result_List::click_column_hnd);
-
-    my $r = $clm->get_cell_renderers;
-
-
-    $r->set('xalign', $clmns[$i]{align});
-    if ($clmns[$i]{type} eq 'bool') {
-      $r->signal_connect ('toggled' => Result_List::check_box_hnd);
-      $clm->set_cell_data_func ($r, \&bool_randr_func);
-    }
-  }
-
-  $list->get_selection->set_mode ('multiple');
-  $list->get_selection->signal_connect ('changed' =>\&Result_List::sel_change_hnd);
-  $list->get_model->set_sort_func (8, \&Result_List::sort_int, 8);# sort size A
-  $list->get_model->set_sort_func (9, \&Result_List::sort_int, 9);# sort size B
-
-  $scroll = Gtk2::ScrolledWindow->new;
-  $scroll -> set_policy ('automatic', 'automatic');
-  $scroll -> add ($list);
-
-  $list->signal_connect('button-press-event' => sub {
-			  my ($widget,$event) = @_;
-			  if ($event->button == 3) {
-			    my @sel = Result_List::selected_inx();
-			    return TRUE if $#sel > 0;
-			    # not propogate event in list
-			  }
-			  else {FALSE};});
-
- # restore selection after check box clicked 
- sub sel_change_hnd {
-   #my $selection = shift;
-   $list->select (@save_selection);
-   @save_selection = ();
- }
-
-  # on any cell rendering
- sub bool_randr_func {
-    my ($column, $renderer, $model, $iter) = @_;
-    my $col = $renderer->{column_index};
-    my $id = $clmns[$col]{id};
-    my $dtype  = ($model->get ($iter))[$clm{diff}];
-
-    if ($dtype eq 'A' and ($id eq 'b_del' or $id eq 'b_cp')
-        or $dtype eq 'B' and ($id eq 'a_del' or $id eq 'a_cp')) {
-      $renderer->set('visible' , FALSE);
-    }
-    else {
-      #$renderer->set('inconsistent' , TRUE);
-      $renderer->set('visible' , TRUE);
-    }
-  }
-
-  sub sort_int {
-    my $col_num = pop;
-    my ($list, @iter) = @_;
-    @iter = map {$_ = $list->get($_, $col_num); $_=~s/_//g; $_} @iter;
-    return ($iter[0] <=> $iter[1]);
-  }
-
-  sub click_column_hnd {
-    my ($widget, $data) = @_;
-    # print "click_column_hnd\n";
-  }
-
-  sub check_box_hnd {
-    my ($renderer, $row) = @_;
-    my $col = $renderer->{column_index};
-    my $model = $list->get_model;
-    #print "check_box_hnd:$row,$col\n";
-
-    @save_selection = selected_inx();#save to restore
-    my $check_on_sel = 0;
-
-    for my $k (@save_selection) {
-      if ($k == $row) {
-        # click on in selection area
-	$check_on_sel = 1;
-	last;
-      }
-    }
-
-    if ($check_on_sel) {
-      $val = $list->{data}->[$row]->[$col];
-
-      if ($#save_selection > 0
-	  and $row >= $save_selection[0]
-	  and $row <= $save_selection[$#save_selection]) {
-
-	for my $i (@save_selection) {
-	  if (col_visible ($i, $col))   {
-	    $list->{data}->[$i]->[$col] = $val;
-	  }
-	}
-      }
-    }
-    else {@save_selection = ()} # delete seletion
-  }
-
-  sub clear {
-    $list->get_model->clear;
-  }
-
-  # добавление результата в список найденного
-  sub add {
-    my ($name, $info_a, $info_b, $diff) = @_;
-    my ($status);
-
-    $name =~ s/^\///;
-
-    $status = $diff;
-
-    # if ($status ne 'A' and $status ne 'B') {
-    # 	$status .= ($info_a->{perm} ne  $info_b->{perm} ?'p':'')
-    # 	  . ($info_a->{owner} ne  $info_b->{owner} ?'o':'');
-    # }
-
-    my @data;
-    $data[$clm{name}]    = $name;
-    $data[$clm{diff}]    = $status;
-    $data[$clm{size_a}]  = $info_a->{size};
-    $data[$clm{size_b}]  = $info_b->{size};
-    $data[$clm{time_a}]  = $info_a->{mtime};
-    $data[$clm{time_b}]  = $info_b->{mtime};
-    $data[$clm{perm_a}]  = $info_a->{perm};
-    $data[$clm{perm_b}]  = $info_b->{perm};
-    $data[$clm{owner_a}] = $info_a->{owner};
-    $data[$clm{owner_b}] = $info_b->{owner};
-    $data[$clm{a_del}]   = FALSE;
-    $data[$clm{b_del}]   = FALSE;
-    $data[$clm{a_cp}]    = FALSE;
-    $data[$clm{b_cp}]    = FALSE;
-
-    push @{$list->{data}}, [@data];
-  }
-
-  sub get_oper_inx_list {
-    my $result = shift;
-    my $l = $list->{data};
-    my $c = row_count();
-
-    for (my $i = 0; $i < $c; $i++) {
-      push @$result, $i if $l->[$i]->[$clm{a_del}]
-      	or $l->[$i]->[$clm{b_del}]
-      	  or $l->[$i]->[$clm{a_cp}]
-      	    or $l->[$i]->[$clm{b_cp}];
-    }
-  }
-
-  sub selected_inx_0 {
-    my @sel = $list->get_selected_indices();
-    return $sel[0];
-  }
-
-  sub selected_inx {
-    return $list->get_selected_indices();
-  }
-
-  # имя выбранного файла
-  sub selected_name {
-    my $inx = selected_inx_0();
-    return @{$list->{data}}[$inx]->[$clm{name}];
-  }
-
-  sub diff_type {
-    my $inx = shift;
-    return @{$list->{data}}[$inx]->[$clm{diff}];
-  }
-
-  sub name {
-    return @{$list->{data}}[shift]->[$clm{name}];
-  }
-
-  sub row {
-    my $inx = shift;
-    return map {$_ => @{$list->{data}}[$inx]->[$clm{$_}]} keys %clm;
-  }
-
-  sub delete_item {
-    my $n = shift;
-    splice @{$list->{data}}, $n, 1;
-  }
-
-  sub grab_focus {
-    $list->grab_focus;
-  }
-
-  sub row_count {
-    return $#{$list->{data}} + 1;
-  }
-
-  sub box {
-    return $scroll;
-  }
-
-  sub col_visible {
-    my ($row, $col) = @_;
-    my $dtype = $list->{data}->[$row]->[$clm{diff}];
-    return ($dtype ne 'B' or $col != $clm{'a_cp'} and $col != $clm{a_del})
-       	  and
-       	  ($dtype ne 'A' or $col != $clm{b_cp} and $col != $clm{b_del});
-  }
-
-  sub set_checks_for_dir {
-    my $path = shift;
-    my @checks = @_;
-
-    for (my $i = 0; $i <= $#{$list->{data}}; $i++) {
-      my $p = substr $list->{data}->[$i]->[$clm{name}], 0, length $path;
-
-      if ($p eq $path) {
-	#print $list->{data}->[$i]->[$clm{name}],  "\n";
-        for my $c ('a_cp', 'a_del', 'b_cp', 'b_del') {
-	  $list->{data}->[$i]->[$clm{$c}] = FALSE;
-	}
-
-        for my $c (@checks) {
-	  if (col_visible ($i, $clm{$c})) {
-	    $list->{data}->[$i]->[$clm{$c}] = TRUE;
-	  }
-	}
-      }
-    }
-  }
-}
-
-# END Result_List ####################################################
-
-package Menu;
-use utf8;
-use Glib qw/TRUE FALSE/;
-
-sub create {
-  my $menu = Gtk2::Menu->new;
-
- # $menu->append (Gtk2::TearoffMenuItem->new);
-
-  while (my $i = shift) {
-    my ($item, $name, $handler, $opt);
-    $name = $i->{caption};
-    $handler = $i->{handler} if exists $i->{handler};
-
-    if (exists $i->{opt}) {
-      $opt = $i->{opt}
-    }
-    else {$opt = 0};
-
-    if ($name eq '---') {
-      $item = Gtk2::SeparatorMenuItem->new ();
-    }
-    else {
-      $item = Gtk2::MenuItem->new_with_label (::text ($name));
-      $item->signal_connect ('activate' => $handler);
-      $item->set_property ('name', $name);
-    }
-
-    $item->set_property ('user-data', $opt);
-    $menu->append ($item);
-  }
-  $menu->signal_connect ('hide' => \&Menu::hide);
-  $menu->show_all;
-  return $menu;
-}
-
-sub show {
-  my ($menu, $check_callback) = @_;
-  my @list = $menu->get_children;
-
-  for my $i (@list) {
-    my $ud = $i->get_property ('user-data');
-    next if not $ud;
-
-    if (! &$check_callback ($ud)) {
-      $i->set_sensitive (FALSE);
-    }
-  }
-  $menu->popup (undef, undef, undef, undef, 0, 0);
-}
-
-sub hide {
-  my ($menu, $event) = @_;
-  my @list = $menu->get_children;
-  for my $i (@list) {
-    $i->set_sensitive (TRUE);
-  }
-}
-
-# END Menu ###########################################################
-package Dir_Box;
-use utf8;
-use Glib qw/TRUE FALSE/;
-
-sub new {
-  my $class = shift;
-  my %opt = @_;
-
-  my $self = {};
-  bless ($self, $class);
-  $self->{label} = $opt{label};
-
-  my $hbox = Gtk2::HBox->new();
-  my $entry = Gtk2::Entry->new;
-  $hbox -> pack_end ($entry, TRUE, TRUE, 0);
-
-  my $lb = Gtk2::Label->new ($self->{label});
-  $hbox->pack_start ($lb, FALSE, TRUE, 0);
-
-  my $hb  = Gtk2::HBox->new();
-  if (exists $opt {butt_size}) {
-    $hb->set_size_request ($opt {butt_size});
-  }
-  else {$hb->set_size_request (120)}
-
-  $hbox -> pack_start ($hb, FALSE, FALSE, 0);
-
-  my $butt = Gtk2::Button->new (' DIR');
-  $hb->pack_start ($butt, TRUE, TRUE, 0);
-  $butt->signal_connect (clicked => \&Dir_Box::file_dialog_run, $self);
-
-  if (not exists $opt {sftp_disable} or not $opt {sftp_disable}) {
-    my $butt = Gtk2::Button->new ('SFTP');
-    $hb->pack_start ($butt, TRUE, TRUE, 0);
-    $butt->signal_connect (clicked => \&Dir_Box::sftp_run, $self);
-  }
-
-  $self->{protocol_label} = Gtk2::Label->new ();
-  $hbox->pack_start ($self->{protocol_label}, FALSE, TRUE, 0);
-  $self->{entry} = $entry;
-  $self->{box}   = $hbox;
-  $self->{sftp}  = undef;
-  $self->{sftp_host} = '';
-  $self->{sftp_port} = '';
-  $self->{sftp_login} = '';
-  $self->{sftp_password} = '';
-
-  return  $self;
-}
-
-sub file_dialog_run {
-  my ($widget, $self) = @_;
-  my $caption = $self->{label};
-
-  my $dialog = Gtk2::FileChooserDialog->new
-    (::text ('Select dir') . ' ' . $caption,
-     undef,
-     'select-folder',
-     'gtk-ok'     => 'ok',
-     'gtk-cancel' => 'cancel');
-
-  my $filter = Gtk2::FileFilter->new;
-  $filter->add_mime_type ('inode/directory');
-
-  $dialog->set_filter ($filter);
-
-  if ( $dialog->run eq 'ok') {
-    $self->{entry}->set_text ($dialog->get_filename);
-    $self->sftp_disconnect();
-  }
-  $dialog->destroy;
-}
-
-sub tree_path {
-  my ($tree_view, $iter) = @_;
-  my $model = $tree_view->get_model();
-  my $dir_path;
-
-  while ($iter) {
-    my $name = $model->get_value ($iter);
-    $dir_path = $name . '/' . $dir_path;
-    $iter = $model->iter_parent ($iter);
-  }
-  return '/' . $dir_path;
-}
-
-sub sftp_ls {
-  my ($sftp, $dir) = @_;
-  my $ls = $sftp->ls ($dir ,
-		      wanted => sub {my $n=$_[1];
-				     $n->{filename} !~ /^\.{1,2}$/
-				       and ::file_type_format ($n->{a}->perm) eq 'dir';
-				   });
-  my @dirs = sort map {$_->{filename}} @$ls ;
-  return \@dirs;
-}
-
-sub sftp_expand_dir {
-  my ($view, $iter, $path, $sftp) = @_;
-  #Gtk2::TreeView, Gtk2::TreeIter, Gtk2::TreePath
-  my $model = $view->get_model;
-
-  my $first_child = $model->iter_children ($iter);
-  my $first_val = $model->get_value ($first_child);
-
-  if (! $first_val) {
-    # yet not expanded throw sftp
-
-    my $names = sftp_ls ($sftp, tree_path ($view, $iter));
-
-    # remove fictive ''-child
-    if (@$names) {
-      $model->remove ($first_child);
-    }
-
-    for my $n (@$names) {
-      my $it = $model->append ($iter);
-      $model->set ($it, 0 => $n);
-      # add fictive '' children - need for expand dir work
-      my $iter_child = $model->append ($it);
-      $model->set ($iter_child, 0 => '');
-    }
-  }
-  return FALSE; # need expand
-}
-
-sub sftp_browser_create {
-  my $sftp = shift;
-
-  my $sw = Gtk2::ScrolledWindow->new (undef, undef);
-  $sw->set_shadow_type ('etched-out');
-  $sw->set_policy ('automatic', 'automatic');
-  $sw->set_size_request (300, 300);
-  $sw->set_border_width (5);
-
-  my $model = Gtk2::TreeStore->new (qw/Glib::String/);
-
-  my $names = sftp_ls ($sftp, '/');
-
-  for my $n (@$names) {
-    my $iter = $model->append (undef);
-    $model->set ($iter, 0 => $n);
-    my $iter_child = $model->append ($iter);
-    $model->set ($iter_child, 0 => '');
-  }
-
-  my $tree_view = Gtk2::TreeView->new ($model);
-  $tree_view->signal_connect ('test-expand-row'=>\&sftp_expand_dir, $sftp);
-  $tree_view->set ('show-expanders', TRUE);
-
-  my $tree_column = Gtk2::TreeViewColumn->new();
-
-  $tree_column->set_title ("Click to sort");
-  my $renderer = Gtk2::CellRendererText->new;
-  $tree_column->pack_start ($renderer, FALSE);
-  $tree_column->add_attribute ($renderer, text => 0);
-  $tree_view->append_column ($tree_column);
-  $tree_view->set_expander_column ($tree_column);
-
-  $tree_view->set_search_column (0);
-  $tree_column->set_sort_column_id (0);
-  $tree_view->set_reorderable(TRUE);
-  $sw->add ($tree_view);
-  $sw->show_all ();
-  return ($sw, $tree_view);
-}
-
-sub sftp_connect {
-  my ($host, $port, $login, $pass) = @_;
-  my $sftp;
-
-  $sftp = Net::SFTP::Foreign->new (host     => $host,
-                                   port     => $port,
-				   user     => $login,
-				   password => $pass);
-
-  if ($sftp->error) {
-    ::show_msg ('error', ::text ('SSH connect fail') .":\n" . $sftp->error);
-    return undef;
-  }
-  else {return $sftp}
-}
-
-sub sftp_disconnect {
-  my $self = shift;
-
-  if ($self->{sftp}) {
-    $self->{sftp}->disconnect;
-    $self->{sftp} = undef;
-    $self->{protocol_label}->set_text ('');
-  }
-}
-
-sub sftp_run {
-  my ($widget, $self) = @_;
-  eval {
-    require Net::SFTP::Foreign;
-    require Net::SFTP::Foreign::Attributes;
-  };
-  if ($@) {
-    ::show_msg ('error', $@);
-    return;
-  }
-
-  my $dialog = Gtk2::Dialog->new (::text ("SFTP connect") 
-				  . ($self->{sftp} ? ' - connected':''),
-				  $main_window,
-				  ['modal', 'destroy-with-parent'],
-                                  'gtk-close' => 'close');
-  my $mainbox = Gtk2::VBox->new ();
-  $dialog->vbox->add ($mainbox);
-  my $table = Gtk2::Table->new (4, 3, FALSE);
-  $mainbox->pack_start ($table, FALSE, FALSE, 0);
-
-  my $lb = Gtk2::Label->new (::text ('host'));
-  $lb->set_alignment (1.0, 0.5);
-  $table->attach ($lb, 0, 1, 0, 1, ['fill'],['expand', 'fill'], 5, 0);
-  my $host_entr = Gtk2::Entry->new();
-  $table->attach_defaults ($host_entr, 1, 2, 0, 1);
-
-  $lb = Gtk2::Label->new (::text ('port'));
-  $lb->set_alignment (1.0, 0.5);
-  $table->attach ($lb, 2, 3, 0, 1, ['fill'],['expand', 'fill'], 5, 0);
-  my $port_entr = Gtk2::Entry->new();
-  $table->attach_defaults ($port_entr, 3, 4, 0, 1);
-
-  $lb = Gtk2::Label->new (::text ('login'));
-  $lb->set_alignment (1.0, 0.5);
-  $table->attach ($lb, 0, 1, 1, 2, ['fill'],['expand', 'fill'], 5, 0);
-  my $login_entr = Gtk2::Entry->new();
-  $table->attach_defaults ($login_entr, 1, 2, 1, 2);
-
-  $lb = Gtk2::Label->new (::text ('password'));
-  $lb->set_alignment (1.0, 0.5);
-  $table->attach ($lb, 2, 3, 1, 2, ['fill'],['expand', 'fill'], 5, 0);
-  my $pass_entr = Gtk2::Entry->new();
-  $pass_entr->set ('invisible-char', 0x2a);
-  $pass_entr->set ('visibility', FALSE);
-
-  $table->attach_defaults ($pass_entr, 3, 4, 1, 2);
-
-  my $status_lb =  Gtk2::Label->new ('Disconnected');
-  $mainbox->pack_start ($status_lb, TRUE, TRUE, 0);
-
-  my $status_set = sub {
-    my ($host, $login) = @_;
-    if ($host) {
-      $status_lb->set_markup ("<span weight=\"bold\" foreground=\"red\">"
-			      ." Connected to $host as '$login'"
-			     . "</span>");
-    }
-    else {
-      $status_lb->set_markup ("<span weight=\"bold\" foreground=\"red\">"
-			      . 'Disconnected'
-			     . "</span>");
-    }
-  };
-
-  my $tree;
-
-  my $hbox = Gtk2::HBox->new(TRUE);
-  $mainbox->pack_start ($hbox, FALSE, FALSE, 0);
-
-  my $butt =  Gtk2::Button->new (::text ('Connect'));
-  $hbox->pack_start ($butt, TRUE, TRUE, 0);
-  $butt->signal_connect (clicked =>
-			 sub {
-			   sftp_disconnect($self->{sftp}) if $self->{sftp};
-
-			   $self->{sftp}  = sftp_connect ($host_entr->get_text,
-							  $port_entr->get_text,
-							  $login_entr->get_text,
-							  $pass_entr->get_text);
-
-			   &$status_set ($host_entr->get_text, $login_entr->get_text);
-			 });
-
-
-  $butt =  Gtk2::Button->new (::text ('Select dir'));
-  $hbox->pack_start ($butt, TRUE, TRUE, 0);
-  $butt->signal_connect (clicked =>
-			 sub {
-			   if ($self->{sftp}) {
-			     my $tree_box;
-			     ($tree_box, $tree) = sftp_browser_create ($self->{sftp});
-			     #$table->attach_defaults ($tree_box, 0, 5, 3, 4);
-                             $mainbox->pack_start ($tree_box, TRUE, TRUE, 0);
-			   }
-			   else {::show_msg ('error', ::text ('Not connected'))}
-			 });
-
-  $butt =  Gtk2::Button->new (::text ('Disconnect'));
-  $hbox->pack_start ($butt, TRUE, TRUE, 0);
-  $butt->signal_connect (clicked =>sub {sftp_disconnect ($self);
-					&$status_set()});
-
-  if ($self->{sftp}) {
-    $host_entr->set_text ($self->{sftp_host});
-    $port_entr->set_text ($self->{sftp_port});
-    $login_entr->set_text ($self->{sftp_login});
-    $pass_entr->set_text ($self->{sftp_password});
-    &$status_set ($self->{sftp_host}, $self->{sftp_login});
-  }
-  else {
-    $port_entr->set_text ('22');
-    &$status_set ();
-  }
-
-  $dialog->show_all;
-
-  my $response = $dialog->run;
-
-  if ($self->{sftp}) {
-    $self->{sftp_host} = $host_entr->get_text;
-    $self->{sftp_port} = $port_entr->get_text;
-    $self->{sftp_login} = $login_entr->get_text;
-    $self->{sftp_password} = $pass_entr->get_text;
-
-    $self->{protocol_label}->set_text ($login_entr->get_text
-				       .'@'. $host_entr->get_text);
-
-    if ($tree) {
-      my $sel_iter = $tree->get_selection()->get_selected();
-      my $dir = tree_path ($tree, $sel_iter);
-      $self->{entry}->set_text ($dir);
-    }
-    else {
-      #$self->{entry}->set_text ('/');
-    }
-  }
-  $dialog->destroy;
-}
-
-sub set_handler {
-  my ($self, $handler) = @_;
-  $self->{entry}->signal_connect ('changed' => $handler);
-}
-
-sub get {
-  my $self = shift;
-  my $path = ::envar (::pwd (::home (::rm_sp ($self->{entry}->get_text))));
-  $path =~ s/\/$//;
-  set ($self, $path);
-  return $path;
-}
-
-sub sftp {
-  my $self = shift;
-  return $self ->{sftp};
-}
-
-sub set {
-  my ($self, $str) = @_;
-  $self->{entry}->set_text ($str);
-}
-
-sub box {
-  my $self = shift;
-  return $self ->{box};
-}
-
-sub focus {
-  my $self = shift;
-  return $self ->{entry}->grab_focus;
-}
-# END Dir_Box ########################################################
-
-package main;
 use Encode;
-use Glib qw /TRUE FALSE/;
 use utf8;
 use open ':utf8';
-use Gtk2 '-init';
 use File::Find;
 use File::Copy;
+use File::Copy::Recursive;
 use File::Path;
 use File::Basename;
 use MIME::Base64 qw(decode_base64);
 use File::Compare;
 use URI::Escape;
 
-use strict;
+use threads;
+use threads::shared;
 
-my ($start_dir_a, $start_dir_b, $sftp_a);
-my ($icon_data, $lang, %local_text, %help_text);
+my $main_title  = 'dir-comp';
+my $open_helper = 'exo-open';
+my $editor      = 'leafpad';
+
+our $VERSION='1.1';
+
+show_version () if defined $ARGV[0] and ($ARGV[0] eq '-v' or $ARGV[0] eq '--version');
+
+my $lang;
+BEGIN {# set $lang
+  my ($x, $codepage) = split /\./, $ENV{LANG};
+  my ($language, $country) = split /_/, $x;
+
+  if ($codepage =~ /utf-?8/i) {
+    $lang = lc ($language);
+  } else {
+    $lang = 'en';
+  }
+}
+
+$threads::shared::clone_warn = 1;
+
+{
+  my @work_queue : shared;
+  # hash with 'oper', 'src', 'dst', 'file_type'
+  my @work_queue_lock : shared;
+  my @messages : shared;
+  my $work_completed_flg : shared;
+  my $start_thread : shared = 0;
+  my $work_thread_exit_flg : shared = 0;
+  my $stop_on_complete_flg : shared;
+  my $abort_flg : shared;
+
+  my $work_thread = threads
+    ->create
+    (sub {
+       my $cnt = 0;
+       while (! $work_thread_exit_flg) {
+
+	 lock ($start_thread);
+	 cond_wait ($start_thread);
+	 # printf "start working:%d\n", $cnt++;
+	 mess ('== START ==');
+	 $work_completed_flg = 0;
+	 $abort_flg = 0;
+	 $stop_on_complete_flg = 0;
+       OUTER:
+	 #	 while (! $stop_on_complete_flg) {
+	 while (1) {
+	   while (@work_queue) {
+	     if ($abort_flg) {
+	       @work_queue = ();
+	       mess ("== ABORTED ==");
+	       last OUTER;
+	     }
+
+	     my $t = shift @work_queue;
+	     # print "task:$t->{oper},$t->{file_type},"
+	     #   . encode ('utf-8',$t->{src}) .","
+	     #   . encode ('utf-8',$t->{dst}). "\n";
+
+	     if ($t->{oper} eq 'end') {
+	       last OUTER;
+	     } elsif ($t->{oper} eq 'start') {
+	       # for debug only
+	     } else {
+	       my $op_m = ($t->{oper} eq 'c'? 'copy':
+			   ($t->{oper} eq 'm'?'move':
+			    ($t->{oper} eq 'd'?'delete':'???')));
+	       mess ("$op_m '$t->{src}' -> '$t->{dst}'");
+	       my $res = oper_do ($t);
+	       mess ("** ERROR: " . $res ." **") if $res;
+	     }
+	   }
+	 }
+	 mess ('== END ==');
+	 $work_completed_flg = 1;
+       }
+     });
+
+  sub mess {
+    my $s = shift;
+    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) =
+      localtime(time);
+    push @messages, sprintf ("%02d:%02d:%02d $s", $hour,$min,$sec);
+  }
+
+  sub worker_start {
+    lock ($start_thread);
+    cond_signal ($start_thread);
+    # print "start_work\n";
+  }
+
+  sub worker_add_task {
+    push @work_queue, shared_clone ($_[0]);
+  }
+
+  sub worker_stop_on_complete {
+    #$stop_on_complete_flg = 1;
+    worker_add_task ({oper        => 'end',
+			file_type => '',
+			src       => '',
+			dst       => ''});
+  }
+
+  sub worker_is_working {
+    return not $work_completed_flg;
+  }
+
+  sub worker_get_message {
+    return shift @messages;
+  }
+  sub worker_exit {
+    $work_thread_exit_flg = 1;
+  }
+
+  sub worker_break {
+    $abort_flg = 1;
+  }
+}# END of worker
+
+
+# after create $work_thread !!!
+use Glib qw /TRUE FALSE/;
+use Gtk2 '-init';
+
+my ($start_dir_a, $start_dir_b, %comp_opt,  @ignored_files, @ignored_dirs);
+my ($icon_data, %local_text, %help_text);
 
 my $dir_box_a;
 my $dir_box_b;
@@ -736,23 +157,26 @@ my $chk_date;
 my $chk_content;
 my $chk_size;
 my $chk_show_all;
+my $chk_show_dirs;
 my $progress_bar;
+my $mode_box;
+my $depth_sp;
+my $icon_pixbuf;
 my $main_window = create_window ();
-
+my $exe_butt;
+my $clear_hidd_butt;
 my $break_oper = 0;
-
 
 init_controls ();
 
 my @tmp_files;
 
 Gtk2->main;
+
 0;
 
 ######################################################################
 sub create_window {
-  my $icon_pixbuf;
-
   eval {
     my $raw_data = decode_base64 ($icon_data);
     my $pixbufloader = Gtk2::Gdk::PixbufLoader->new;
@@ -773,14 +197,24 @@ sub create_window {
 
   my $mainbox = Gtk2::VBox->new ();
 
-  $dir_box_a = Dir_Box->new (label => 'A:');
-  $dir_box_b = Dir_Box->new (label => 'B:', sftp_disable => 1);
+  $dir_box_a = Dir_Box->new (label => 'A');
+  $dir_box_b = Dir_Box->new (label => 'B');
 
-  $mainbox->pack_start ($dir_box_a->box, FALSE, FALSE, 0);
-  $mainbox->pack_start ($dir_box_b->box, FALSE, FALSE, 0);
+  $mainbox->pack_start ($dir_box_a->{box}, FALSE, FALSE, 0);
+  $mainbox->pack_start ($dir_box_b->{box}, FALSE, FALSE, 0);
 
   # кнопки управления
   my $hbox = Gtk2::HBox->new (FALSE, 5);
+
+  $mode_box = Selector->new('ab' => 'A <-> B',
+			    'a'  => 'A  -> B',
+			    'b'  => 'B  -> A');
+  #$mode_box -> set_label ('mode');
+  #$mode_box -> set_size (80);
+
+  $hbox -> pack_start ($mode_box->{box}, FALSE, FALSE, 0);
+
+
   my $butt;
 
   $chk_size = Gtk2::CheckButton->new (text ('size'));
@@ -794,50 +228,66 @@ sub create_window {
   $chk_content = Gtk2::CheckButton->new (text ('content'));
   $hbox -> pack_start ($chk_content, FALSE, FALSE, 0);
 
+  $chk_show_dirs = Gtk2::CheckButton->new (text ('show dirs'));
+  $hbox -> pack_start ($chk_show_dirs, FALSE, FALSE, 0);
+
   $chk_show_all = Gtk2::CheckButton->new (text ('show all'));
-  $hbox -> pack_start ($chk_show_all, FALSE, FALSE, 0);
+  $hbox -> pack_start ($chk_show_all, FALSE, FALSE, 15);
+
+  my $lb = Gtk2::Label->new (text ('search depth') . ':');
+  $hbox -> pack_start ($lb, FALSE, FALSE, 0);
+  $depth_sp = Gtk2::SpinButton->new (Gtk2::Adjustment->new(0,0,100,1,0,0),0,0);
+  $hbox -> pack_start ($depth_sp, FALSE, FALSE, 0);
+  $depth_sp->set_size_request (48);
 
   $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
 
   # bit flags for control  menu item show
-  # 1- need A, 2 - need B, 4 - local (not sftp) files
-  my $menu = Menu::create ({caption => 'Select files in dir',
-			    handler => \&select_files_in_dir,
+  # 1- only A, 2 - only B, 4 - only files (for dirs not allowed)
+  my $menu = Menu::create ({caption => 'Set flags ..',
+			    handler => \&select_files_in_dir_dlg,
+			    opt => 4},
+			   {caption => 'Hide records ..',
+			    handler => \&ignore_path_dlg,
 			    opt => 0},
 			   {caption=> 'Open A',
-                            handler => sub {open_handler('a')},
-                            opt => 1},
+			    handler => sub {open_handler('a')},
+			    opt => 1},
 			   {caption=> 'Open B',
-                            handler => sub {open_handler('b')},
-                            opt => 2},
-                           {caption=>'---'},
+			    handler => sub {open_handler('b')},
+			    opt => 2},
+			   {
+			    caption=>'---'},
 			   {caption=>'Open A with ..',
 			    handler => sub {open_with_dlg ('a')},
 			    opt => 1},
 			   {caption=>'Open B with ..',
 			    handler => sub {open_with_dlg ('b')},
 			    opt => 2},
-                           {caption=>'---'},
-			   {caption=>'Copy A to ..',
-			    handler => sub {copy_to_dlg ('a')},
-			    opt => 1},
-			   {caption=>'Copy B to ..',
-			    handler => sub {copy_to_dlg ('b')},
-			    opt => 2},
-			   {caption=>'---'},
+			   {
+			    caption=>'---'},
 			   {caption=>'Copy A to clipboard',
 			    handler => sub {clipboard_copy('a')},
-                            opt => 1 | 4},
+			    opt => 1},
 			   {caption=>'Copy B to clipboard',
 			    handler => sub {clipboard_copy('b')},
-                            opt => 2},
-			   {caption=>'---'},
+			    opt => 2},
+			   {
+			    caption=>'---'},
+			   {caption=>'Rename A',
+			    handler => sub {rename_dlg('a')},
+			    opt => 1},
+			   {caption=>'Rename B',
+			    handler => sub {rename_dlg('b')},
+			    opt => 2},
+			   {
+			    caption=>'---'},
 			   {caption=>'diff A and B',
 			    handler => \&diff_files,
-			    opt => 1 | 2},
+			    opt => 1 | 2 | 4},
 			   {caption=>'comp A and B content ',
 			    handler => \&comp_content,
-			    opt => 1 | 2});
+			    opt => 1 | 2 | 4});
 
   #EventBox нужен для корректного позиционировани контекстного меню
   my $eventbox = Gtk2::EventBox->new();
@@ -847,24 +297,46 @@ sub create_window {
   # Result_List использует событие 'button-press-event' для выделения строк
   # его перехватывать нельзя, перехватываем только 'button-release-event'
 
+  Result_List::create();
+
   $eventbox->add (Result_List::box());
 
   $mainbox->pack_start ($eventbox, TRUE, TRUE, 0);
-
-#  $progress_bar =Gtk2::ProgressBar->new;
-#  $mainbox->pack_start ($progress_bar, FALSE, FALSE, 0);
 
   # кнопки управления
   $hbox = Gtk2::HBox->new(TRUE);
 
   my $comp_butt = Gtk2::Button->new (text ('Compare'));
   $hbox->pack_start ($comp_butt, TRUE, TRUE, 0);
-  my $exe_butt = Gtk2::Button->new (text ('Execute'));
+  $exe_butt = Gtk2::Button->new (text ('Execute'));
+  $exe_butt->set_sensitive (FALSE);
   $hbox->pack_start ($exe_butt, TRUE, TRUE, 0);
 
-  $exe_butt->signal_connect (clicked => \&operation_do, $comp_butt);
-  $comp_butt->signal_connect (clicked => \&start_compare, $exe_butt);
+  $exe_butt->signal_connect (clicked =>
+			     sub {
+			       $comp_butt->set_sensitive (FALSE);
+			       start_operation();
+			       $comp_butt->set_sensitive (TRUE);
+			     });
+  $comp_butt->signal_connect (clicked =>
+			      sub {
+				$exe_butt->set_sensitive (FALSE);
+				start_compare();
+				$exe_butt->set_sensitive (TRUE);
+			      });
 
+  #  $comp_butt->signal_connect (clicked => \&start_work, $exe_butt);
+
+
+  $clear_hidd_butt = Gtk2::Button->new (text ('Clear hidden list'));
+  $clear_hidd_butt->signal_connect (clicked =>
+				    sub {my $b = shift;
+					 @ignored_dirs = ();
+					 @ignored_files = ();
+					 $b->set_sensitive (FALSE)},
+			 $window);
+  $clear_hidd_butt->set_sensitive (FALSE);
+  $hbox->pack_start ($clear_hidd_butt, TRUE, TRUE, 0);
 
   $butt = Gtk2::Button->new (text ('Help'));
   $butt->signal_connect (clicked => \&show_help, $window);
@@ -886,6 +358,25 @@ sub create_window {
   return $window;
 }
 
+### GUI routines ############################################################
+sub on_exit {
+  $break_oper = 1;
+  Gtk2->main_quit;
+  worker_exit();
+}
+
+sub init_controls {
+  Result_List::clear();
+  $dir_box_a->set(decode ('utf-8', $ENV{PWD}));
+  $dir_box_b->set(decode ('utf-8', $ENV{PWD}));
+  $dir_box_a->focus;
+}
+
+sub re_init {
+  Result_List::clear();
+  $exe_butt->set_sensitive (FALSE);
+}
+
 sub show_msg {
   my ($type, $text) = @_;
   my $butt = 'ok';
@@ -894,16 +385,15 @@ sub show_msg {
     $butt = 'yes-no';
   }
   my $dialog = Gtk2::MessageDialog->new ($main_window,
-                                         'destroy-with-parent',
-                                         $type, # message type
-                                         $butt, # which set of buttons?
-                                         text ($text));
+					 'destroy-with-parent',
+					 $type, # message type
+					 $butt, # which set of buttons?
+					 text ($text));
 
   if ($dialog->run eq 'yes') {
     $dialog->destroy;
     return 1;
-  }
-  else {
+  } else {
     $dialog->destroy;
     return 0;
   }
@@ -935,13 +425,90 @@ sub show_text {
   $dialog->destroy;
 }
 
-sub init_controls {
-  Result_List::clear();
-  $dir_box_a->set(decode ('utf-8', $ENV{PWD}));
-  $dir_box_b->set(decode ('utf-8', $ENV{PWD}));
-  $dir_box_a->focus;
+sub show_help {
+  my $dialog = Gtk2::Dialog->new (text ('Help'),
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-ok'     => 'ok');
+
+  $dialog->set_size_request (640, 480);
+  my $textview = Gtk2::TextView->new();
+  my $scroll = Gtk2::ScrolledWindow->new;
+  $scroll->set_policy ('automatic', 'automatic');
+  $scroll->add ($textview);
+
+  $textview->set_editable (FALSE);
+  $textview->set_wrap_mode ('word');
+
+  my $buffer = $textview->get_buffer();
+  my $head_tag = $buffer->create_tag ('head',
+				      'foreground' => '#006600',
+				      'weight'     => 900);
+  my $start = $buffer->get_start_iter();
+  my $end;
+
+  for my $i (@{$help_text{$lang}}) {
+    $buffer->insert_with_tags ($start, $i->{title} . "\n\n", $head_tag);
+    $buffer->insert ($start, $i->{text} . "\n\n");
+  }
+
+  $dialog->vbox->add ($scroll);
+  $dialog->show_all;
+  my $response = $dialog->run;
+  $dialog->destroy;
 }
 
+sub menu_popup {
+  my ($widget, $event, $menu) = @_;
+  my @sel = Result_List::selected_inx();
+
+  if ($#sel == 0 and $event->button == 3) { # только для одной строчки
+    my $fmark = Result_List::mark ($sel[0]);
+
+    return if ($fmark eq '*');
+    # для специальных файлов меню не показываем
+
+    my $dtype = Result_List::diff_type ($sel[0]);
+    my $patt = 0;
+
+    if ($dtype eq 'A') {
+      $patt |= 1;
+    } elsif ($dtype eq 'B') {
+      $patt |= 2;
+    } else {
+      $patt |= 3;
+    }
+    ;
+    $patt |= 4 if not $fmark eq 'D';
+
+    Menu::show ($menu, sub {my $opt = shift; return ($patt & $opt) == $opt});
+  }
+}
+
+sub dir_swap_focus {
+  $dir_box_a->focused ? $dir_box_b->focus : $dir_box_a->focus;
+}
+
+sub gui_upd {
+  progress_next ();
+  while (Glib::MainContext->default->pending) {
+    Glib::MainContext->default->iteration (FALSE);
+  }
+}
+
+### key handlers ###############################################################
+sub window_press_key {
+  my ($widget, $event, $parameter)= @_;
+  my $key_nr = $event->keyval();
+  my $modif =  $event->state();
+
+  if ($modif >= ['control-mask'] and $key_nr == 113) { #ctrl-q
+    Gtk2->main_quit;
+  }
+  return FALSE;
+}
+
+### progress indicator #########################################################
 {
   my $all;
   my $curr;
@@ -954,11 +521,11 @@ sub init_controls {
     $dialog = Gtk2::Dialog->new (text ("Please wait") . '...',
 				 $main_window,
 				 ['modal', 'destroy-with-parent'],
-				  'gtk-cancel' => 'cancel');
+				 'gtk-cancel' => 'cancel');
     $dialog->set_size_request (300, -1);
     $dialog->signal_connect (response => sub {
-					      $break_oper = 1;
-					      $dialog->destroy()});
+			       $break_oper = 1;
+			       $dialog->destroy()});
     $pb =Gtk2::ProgressBar->new;
 
     $pb->set_text ($text);
@@ -980,10 +547,9 @@ sub init_controls {
   sub progress_next {
     #$progress_bar->set_text ('progress');
     if ($all) {
-       $curr++;
-       $pb->set_fraction ($curr / $all);
-    }
-    else {
+      $curr++;
+      $pb->set_fraction ($curr / $all);
+    } else {
       $pb->pulse;
     }
   }
@@ -997,8 +563,352 @@ sub init_controls {
   }
 }
 
-##############################################################################
-# обработчики
+### compare routines ###########################################################
+sub start_compare {
+  #global var %comp_opt
+  $comp_opt{check_date} = $chk_date->get_active;
+  $comp_opt{check_content}  = $chk_content->get_active;
+  $comp_opt{check_size} = $chk_size->get_active;
+  $comp_opt{show_all} = $chk_show_all->get_active;
+  $comp_opt{show_dirs} = $chk_show_dirs->get_active; 
+  $comp_opt{search_depth} = $depth_sp->get_value;
+  $comp_opt{mode} = $mode_box->get;
+
+  ($start_dir_a, $start_dir_b) = ($dir_box_a->get, $dir_box_b->get);
+
+  Result_List::clear();
+
+  $start_dir_a ne $start_dir_b || return;
+
+  my (@names_a, @names_b);
+
+  #print "$start_dir_a,$start_dir_b\n";
+  progress_start (0, text ('get file-list') . ' A');
+  create_path_list ($start_dir_a, \@names_a, $comp_opt{search_depth});
+  progress_reset (0, text ('get file-list') . ' B');
+  create_path_list ($start_dir_b, \@names_b, $comp_opt{search_depth});
+
+  #print "A:@names_a\n";
+  #print "B:@names_b\n";
+
+  progress_reset (0, text ('compare dirs'));
+
+  comp_path_lists (\@names_a, \@names_b, \&progress_next);
+
+  progress_end();
+
+  Result_List::row_count() == 0 and ! $break_oper
+      and show_msg ('info', text ('No differences were found'));
+
+  Result_List::clear() if $break_oper;
+}
+
+sub create_path_list {
+  my ($start_dir, $res, $depth) = @_;
+  my $d = $depth + dir_depth ($start_dir) - 1 if $depth;
+  eval {
+    my $cnt = 0;
+    find ({preprocess => ($depth?
+			  sub {my $dep = dir_depth ($File::Find::dir);
+                               #print "$File::Find::dir, d:$dep\n";
+                               if ($dep <= $d) {
+				 return @_;
+			       }
+			       ;
+			       return;
+			     } : undef),
+	   wanted => sub {
+	     die if $break_oper;
+	     return if /^\.\.?$/;
+	     my $path = decode ('utf8', $File::Find::name);
+	     my $p = substr $path, (length $start_dir) + 1;
+	     # удаляем вместе с /
+	     if (! ignored ($p)) {
+	       push @$res,  $p;
+	     }
+
+	     gui_upd (), $cnt = 0 if $cnt++ >= 20;
+	   }},
+	  encode ('utf8', $start_dir));
+  };
+  if ($@ and ! $break_oper) {
+    show_msg ('error', "Find file error: $@\n$start_dir");
+  }
+}
+
+sub comp_path_lists {
+  my ($names_a, $names_b, $iter_callback) = @_;
+  my ($base_list, $other_list, $base_letter, $other_letter);
+  my ($base_dir, $other_dir);
+  my (%base_parm, %other_parm, $parm_a, $parm_b);
+
+  if ($comp_opt{mode} eq 'b') {
+    ($base_list, $other_list)  = ($names_b, $names_a);
+    ($base_letter, $other_letter) = ('B', 'A');
+    ($base_dir, $other_dir)  = ($start_dir_b, $start_dir_a);
+    ($parm_b, $parm_a) = (\%base_parm, \%other_parm);
+  } else {
+    ($base_list, $other_list)  = ($names_a, $names_b);
+    ($base_letter, $other_letter) = ('A', 'B');
+    ($base_dir, $other_dir)  = ($start_dir_a, $start_dir_b);
+    ($parm_a, $parm_b) = (\%base_parm, \%other_parm);
+  }
+
+  my %others_names;
+  map {$others_names{$_} = 1} @$other_list;
+
+  #map {print "$_:$comp_opt{$_}\n"} keys %comp_opt;
+
+  for my $n (@$base_list) {
+    my $base_path = $base_dir .'/' . $n;
+    %base_parm = get_file_info ($base_path);
+    %other_parm = ();
+
+    if (! exists $others_names{$n}) { # файл есть только в base_dir
+      Result_List::add ($n, $parm_a, $parm_b, $base_letter)
+	  if $base_parm{type} ne 'dir' or $comp_opt{show_dirs};
+    } else {
+      delete $others_names{$n};
+
+      my $other_path = $other_dir .'/' . $n;
+      %other_parm = get_file_info ($other_path);
+
+      if ($base_parm{type} ne $other_parm{type}) {
+	Result_List::add ($n, $parm_a, $parm_b, 'X');
+	# разнотипные файлы (директории) - синхронизация невозможна
+      } elsif ($base_parm{type} eq 'dir') {
+	Result_List::add ($n, $parm_a, $parm_b, 'AB')
+	    if $comp_opt{show_all} and $comp_opt{show_dirs};
+	# не выполняем никаких проверок для катологов - просто добавляем
+	# если они есть в списке (в зависимости от show_all)
+      } else {
+	my ($diff);
+	$comp_opt{check_size} and $base_parm{size} ne $other_parm{size}
+	  and $diff .= 's';
+	$comp_opt{check_date} and $base_parm{mtime} ne $other_parm{mtime}
+	  and $diff .= 't';
+
+	if ($comp_opt{check_content}) {
+	  $diff .= 'c' if $base_parm{size} ne $other_parm{size} or
+	    compare ($base_path, $other_path);
+	}
+
+	! $diff and $comp_opt{show_all} and  $diff = '=';
+
+	Result_List::add ($n, $parm_a, $parm_b, $diff) if $diff;
+      }
+    }
+    &$iter_callback if defined $iter_callback;
+  }
+
+  if ($comp_opt{mode} eq 'ab') {
+    for my $n (keys %others_names) {
+      my $other_path = $other_dir .'/' . $n;
+      %other_parm = get_file_info ($other_path);
+      %base_parm = ();
+      Result_List::add ($n, $parm_a, $parm_b, $other_letter)
+	  if $other_parm{type} ne 'dir' or $comp_opt{show_dirs};
+      &$iter_callback if defined $iter_callback;
+    }
+  }
+}
+
+sub re_comp_files {
+  my ($name, $is_dir) = @_;
+  my (@list_a, @list_b);
+
+  Result_List::delete_path_match ($name, $is_dir);
+
+  my ($path_a, $path_b) = ($start_dir_a .'/'. $name,
+			   $start_dir_b .'/'. $name);
+  my $depth;
+  if ($is_dir and $comp_opt{search_depth}) {
+    $depth = $comp_opt{search_depth} - dir_depth ($name);
+  }
+  #print "re_comp_files:$path_a, $path_b, $depth\n";
+  if (-e  $path_a) {
+    if ($is_dir) {
+      if ($depth) {
+	create_path_list ($path_a, \@list_a, $depth);
+	map {$_ = $name . '/' . $_} @list_a;
+      }
+      push @list_a, $name if $comp_opt{show_dirs}; # после предыдущего!
+    } else {
+      push @list_a, $name if -e  $path_a;
+    }
+  }
+  if (-e  $path_b) {
+    if ($is_dir) {
+      if ($depth) {
+	create_path_list ($path_b, \@list_b, $depth);
+	map {$_ = $name . '/' . $_} @list_a;
+      }
+      push @list_a, $name if $comp_opt{show_dirs};
+    } else {
+      push @list_b, $name if -e  $path_b;
+    }
+  }
+
+  comp_path_lists (\@list_a, \@list_b);
+}
+
+sub get_file_info {
+  my $name = shift;
+  my @par = lstat ($name);
+  #print Encode::encode('utf-8',$name), ", par:@par\n";
+  #               0 dev      device number of filesystem
+  #               1 ino      inode number
+  #               2 mode     file mode  (type and permissions)
+  #               3 nlink    number of (hard) links to the file
+  #               4 uid      numeric user ID of file's owner
+  #               5 gid      numeric group ID of file's owner
+  #               6 rdev     the device identifier (special files only)
+  #               7 size     total size of file, in bytes
+  #               8 atime    last access time in seconds since the epoch
+  #               9 mtime    last modify time in seconds since the epoch
+  #              10 ctime    inode change time in seconds since the epoch (*)
+  #              11 blksize  preferred block size for file system I/O
+  #              12 blocks   actual number of blocks allocated
+
+  if (not @par) {
+    print STDERR "get_file_info:file not exists? '$name'\n";
+    return;
+  }
+  my $type = file_type_format ($par[2]);
+  my $info;
+  if ($type eq 'l') {
+    $info = "-> ". readlink ($name);
+  }
+  if ($type eq 'c' or $type eq 'b') {
+    $info = rdev_format ($par[6]);
+  }
+  return (type  => $type,
+          size  => num_format ($par[7]),
+          ctime => time_format ($par[10]),
+          mtime => time_format ($par[9]),
+          perm  => perm_format ($par[2]),
+          owner => owner_format ($par[4], $par[5]),
+          other => $info);
+}
+
+sub ignored {
+  my $path = shift;
+  for my $p (@ignored_dirs) {
+    # последний символ в имени директории $p='/'
+    # тут два случая:
+    # 1) частичное совпадение с началом в пути к файлу
+    return 1 if (substr $path, 0, length $p) eq $p;
+    # 2) полное совпадение имени директории ($path не содержит '/' на конце)
+    return 1 if $path eq (substr $p, 0, length ($p) - 1);
+  }
+  for my $p (@ignored_files) {
+    return 1 if $path  eq $p;
+  }
+  return 0;
+}
+
+### operation proceduries ######################################################
+sub start_operation {
+  my $err;
+
+  my @inxes;
+  Result_List::get_oper_inx_list (\@inxes);
+
+  return if $#inxes < 0;
+  show_msg ('question', 'Execute all operation?') or return;
+
+  worker_start();
+
+  Oper_Log::create();
+
+  worker_add_task ({oper      => 'start',
+		    file_type => '',
+		    src       => '',
+		    dst       => ''});
+
+  for my $i (@inxes) {
+    last if $break_oper;
+
+    my %row = Result_List::row ($i);
+    my $path_a =  $start_dir_a . '/' . $row{name};
+    my $path_b =  $start_dir_b . '/' . $row{name};
+
+    my ($oper, $src, $dst);
+    my $type = ($row{mark} eq 'D'? 'd':'f');
+
+    if (! $row{a_cp} and ! $row{b_cp}) {
+      # удалять можно оба сразу!
+      $oper = 'd';
+      if ($row{a_del}) {
+	worker_add_task ({oper      => 'd',
+			  file_type => $type,
+			  src       => $start_dir_a . '/' . $row{name},
+			  dst       => ''});
+      }
+      if ($row{b_del}) {
+	worker_add_task ({oper      => 'd',
+			  file_type => $type,
+			  src       => $start_dir_b . '/' . $row{name},
+			  dst       => ''});
+      }
+    } elsif ($row{a_cp} and ! $row{b_cp} and ! $row{b_del}) {
+      $oper = ($row{a_del} ? 'm' : 'c');
+      $src = $start_dir_a . '/' . $row{name};
+      $dst = $start_dir_b . '/' . $row{name};
+    } elsif (! $row{a_cp} and ! $row{a_del} and $row{b_cp}) {
+      $oper = ($row{b_del} ? 'm' : 'c');
+      $src = $start_dir_b . '/' . $row{name};
+      $dst = $start_dir_a . '/' . $row{name};
+    } else {
+      Oper_Log::add ("* ERROR oper code error for '$row{name}'");
+      $oper = 'e';
+    }
+
+    if ($oper eq 'c' or $oper eq 'm') {
+      worker_add_task ({oper      => $oper,
+			file_type => $type,
+			src       => $src,
+			dst       => $dst});
+    }
+  }
+
+  worker_stop_on_complete ();
+}
+
+sub oper_do {
+  my $t = shift;
+  my $is_dir =  $t->{file_type} eq 'd';
+  my ($s, $d, $o) = ($t->{src}, $t->{dst}, $t->{oper});
+
+  if ($o ne 'd') {
+    my $err = check_path ($d);
+    $err and return $err;
+  }
+
+  if ($is_dir) {
+    if ($o eq 'm') {
+      File::Copy::Recursive::dirmove ($s, $d) or return decode ('utf-8', $!);
+    } elsif ($o eq 'c') {
+      File::Copy::Recursive::dircopy ($s, $d) or return decode ('utf-8', $!);
+    } elsif ($o eq 'd') {
+      File::Copy::Recursive::pathrmdir ($s) or return decode ('utf-8', $!);
+    } else {
+      return "oper type error"
+    }
+  } else {
+    if ($o eq 'm') {
+      move ($s, $d) or return decode ('utf-8', $!);
+    } elsif ($o eq 'c') {
+      copy ($s, $d) or return decode ('utf-8', $!);
+    } elsif ($o eq 'd') {
+      unlink $s or return decode ('utf-8', $!);
+    } else {
+      return "oper type error";
+    }
+  }
+  return undef;
+}
+
 sub check_path {
   my $d = dirname ($_[0]);
 
@@ -1009,203 +919,23 @@ sub check_path {
   return undef;
 }
 
-sub sftp_check_path {
-  my $path = shift;
-  my $loop;
-  $loop = sub {
-    my $p = shift;
-    my $d = dirname ($p);
-    unless (-d $d) {
-      &$loop ($d);
-    }
-    if ($p eq $path) {
-      return undef;
-    }
-    else {
-      my $res = $sftp_a->mkdir($p);
-      return "error sftp mkdir '$p':$res:"
-	. decode ('utf-8', $sftp_a->error) if not $res;
-    };
-  };
-
-  &$loop ($path);
+sub is_dir_name {
+  return substr ($_[0], -1,1) eq '/';
 }
 
-sub move_or_copy {
-  my ($name,  $src, $move) = @_;
-  my $path_a =  $start_dir_a . '/' . $name;
-  my $path_b =  $start_dir_b . '/' . $name;
-
-  if ($sftp_a) {
-    if ($src eq 'a') {
-      my $err = check_path ($path_b);
-      $err and return $err;
-
-      $sftp_a->get ($path_a, $path_b, overwrite => 1)
-	or return "error get remote file '$path_a'\nto '$path_b':"
-	  . decode ('utf-8', $sftp_a->error);
-
-      if ($move) {
-	$sftp_a->remove ($path_a)
-	  or return "error remove remote file '$path_a':"
-	    . decode ('utf-8', $sftp_a->error);
-      }
-    }
-    else  {#src=b
-      my $err = sftp_check_path ($path_a);
-      $err and return $err;
-
-      $sftp_a->put ($path_b, $path_a, overwrite => 1)
-	or return "error put file '$path_b' to remote '$path_a':"
-	  . decode ('utf-8', $sftp_a->error);
-
-      unlink $path_b or return "error delete local '$path_b'" if $move;
-    }
-  }
-  else { #local copy
-    my ($s, $d) = ($src eq 'a' ? ($path_a, $path_b) : ($path_b, $path_a));
-    my $err = check_path ($d);
-    $err and return $err;
-
-    if ($move) {
-      move ($s, $d) or return "move error:'$s'\nto '$d'";
-    }
-    else {
-      copy ($s, $d) or return "copy error:'$s'\nto '$d'";
-    }
-  }
-  return undef;
-}
-
-sub oper_copy {
-  my ($name,  $src) = @_;
-  return move_or_copy ($name,  $src, 0);
-}
-
-sub oper_move {
-  my ($name,  $src) = @_;
-  return move_or_copy ($name,  $src, 1);
-}
-
-sub oper_del {
-  my ($name, $letter) = @_;
-  my $path = ($letter eq 'a' ? $start_dir_a : $start_dir_b)
-    . '/' . $name;
-
-  if ($letter eq 'a' and $sftp_a) {
-    $sftp_a->remove ($path)
-      or return "error remove remote file '$path':" 
-	. decode ('utf-8', $sftp_a->error);
-  }
-  else {
-    unlink $path or return "error delete local '$path'"
-  }
-  return '';
-}
-
-sub operation_do {
-  my ($err, $too_many_err);
-
-  my $check_err = sub {
-    return if $too_many_err or not $_[0];
-
-    if (length ($err) > 2000) {
-      $err .= "\n(Too many error)";
-      $too_many_err = 1;
-    }
-    else {
-      $err .= "\n" . $_[0];
-    }
-  };
-
-  # for (my $i = 0; $i < Result_List::row_count(); $i++) {
-  #   my %row = Result_List::row ($i);
-  #   print "$row{a_cp},$row{a_del},$row{b_cp},$row{b_del}  ",
-  #     encode ('utf-8', $row{name}),"\n";
-  # }
-  # return;
-
-  my @inxes;
-  Result_List::get_oper_inx_list (\@inxes);
-
-  return if $#inxes < 0;
-  show_msg ('question', 'Execute all operation?') or return;
-
-  progress_start ($#inxes + 1, text ('execution'));
-
-  for my $i (@inxes) {
-    last if $too_many_err or $break_oper;
-
-    my %row = Result_List::row ($i);
-
-    if ($row{a_cp} and ! $row{b_cp} and ! $row{b_del}) {
-      if (! $row{a_del}) { # copy A->B
-        &$check_err (oper_copy ($row{name}, 'a'));
-      }
-      else { # move A->B
-        &$check_err (oper_move ($row{name}, 'a'));
-      }
-    }
-    elsif (! $row{a_cp} and ! $row{a_del} and $row{b_cp}) {
-      if (! $row{b_del}) {# copy B->A
-	&$check_err (oper_copy ($row{name}, 'b'));
-      }
-      else {# move B->A
-	&$check_err (oper_move ($row{name}, 'b'));
-      }
-    }
-    elsif (! $row{a_cp} and ! $row{b_cp}) {
-      if ($row{a_del}) {
-	&$check_err (oper_del ($row{name}, 'a'));
-      }
-      if ($row{b_del}) {
-	&$check_err (oper_del ($row{name}, 'b'));
-      }
-    }
-    else {
-      $err .= " oper code error for \n$a \n$b\n"
-    }
-    gui_upd();
-  }
-
-  if ($err) {
-    show_msg ('error', $err);
-  }
-  progress_end ();
-
-  start_compare();
-}
-
-sub files_uri {
-  my @res;
-  map {push @res,  'file://' . uri_escape ($_, q( ?<>{}#%`;"))} @_;
-  #print "uri:@res\n";
-  return @res;
-}
-
+### menu handlers ##############################################################
 sub open_with {
   my ($letter, @cmd) = @_;
   my $dir = ($letter eq 'a' ? $start_dir_a : $start_dir_b);
 
   my $name = $dir . '/'. Result_List::selected_name();
 
-  if ($sftp_a and $letter eq 'a') {
-    $name = eval {
-      return sftp_tmp_copy ($sftp_a, $name);
-    };
-    if ($@) {
-      show_msg ("SFTP error:$@\n");
-      return;
-    }
-  }
-
-  if (-f $name) {
+  if (-e $name) {
     if (not fork) {
       print STDERR "open:@cmd $name\n";
       exec (@cmd, files_uri ($name));
     }
-  }
-  else {
+  } else {
     show_msg ("File '$name' not exists\n");
   }
 }
@@ -1238,44 +968,64 @@ sub open_with_dlg {
   open_with ($letter, @cmd) if $response eq 'ok';
 }
 
-sub copy_to_dlg {
+sub comp_content {
+  my ($path_a, $path_b) = ($start_dir_a . '/'. Result_List::selected_name(),
+			   $start_dir_b . '/'. Result_List::selected_name());
+
+  my $res = (compare ($path_a, $path_b) == 0 ?
+	     text ("Content is equevalent")
+	     : text ("Content is different"));
+  show_msg ('info', $res);
+}
+
+sub rename_dlg {
   my $letter = shift;
-  my $dialog = Gtk2::Dialog->new (uc ($letter) . ": " . text ("copy to .."),
+
+  my $dialog = Gtk2::Dialog->new (text ("Rename") . uc ($letter),
 				  $main_window,
 				  ['modal', 'destroy-with-parent'],
 				  'gtk-cancel' => 'cancel',
 				  'gtk-ok'     => 'ok');
-  my $dirbox = Dir_Box->new (label=> '', sftp_disable => 1, butt_size => 50);
-  $dialog->vbox->add ($dirbox->box);
 
+  my $dir = ($letter eq 'a' ? $start_dir_a : $start_dir_b);
+  my $inx = Result_List::selected_inx_0();
+  my $old_name = Result_List::name ($inx);
+  my $is_dir = Result_List::mark($inx) eq 'D';
+  my $old_path = $dir . '/'. $old_name;
+
+  my $entr = Gtk2::Entry->new;
+  $entr->set_width_chars (70);
+  $dialog->vbox->add ($entr);
+
+  my @fn = split '/', $old_name;
+  $entr->set_text ($fn[-1]);
   $dialog->set_default_response ('cancel');
   $dialog->show_all;
   my $response = $dialog->run;
-  my $name = Result_List::selected_name();
-  my $dst = $dirbox->get() . '/' . basename ($name);
-  $dialog->destroy;
 
   if ($response eq 'ok') {
-    my $src = ($letter eq 'a'? $start_dir_a: $start_dir_b)
-                . '/'. $name;
-    #print "copy to:$src->$dst\n";
+    my $new_name = $entr->get_text ();
+    my $new_path =  $dir . '/'. $new_name;
+    print "$old_path'->'$new_path'\n";
 
-    if ($sftp_a and $letter eq 'a') {#copy from sftp to local
-      my $err = check_path ($dst);
-      if ($err) {
-	show_msg ('error', $err);
+    if (dir_depth ($new_name) > 1) {
+      show_msg ("error", ::text ("only file-name without path allowed!"));
+    } elsif (-e $new_path) {
+      show_msg ("error", ::text ("file eixists:") . $new_path);
+    } else {
+      #      my $res = move ($old_path, $new_path);
+      my $res = rename ($old_path, $new_path);
+
+      if ($res) {
+	re_comp_files ($old_name, $is_dir);
+	re_comp_files ($new_name, $is_dir);
+      } else {
+	show_msg ("error", "rename error '$old_path'->'$new_path':".
+		  decode ('utf-8',$!));
       }
-      else {
-	$sftp_a->get ($src, $dst, overwrite => 1)
-	  or show_msg ('error',
-		       "error get remote file '$src'\nto '$dst':"
-		       . decode ('utf-8', $sftp_a->error));
-      }
-    }
-    else {#local copy
-      copy ($src, $dst) or show_msg ('error', "copy error:'$src'\nto '$dst'");
     }
   }
+  $dialog->destroy;
 }
 
 sub diff_files {
@@ -1289,29 +1039,22 @@ sub diff_files {
   my $path_a =  $dir_box_a->get . '/'. $row{name};
   my $path_b =  $dir_box_b->get . '/'. $row{name};
 
-  if ($sftp_a) {
-      $path_a = eval {
-      sftp_tmp_copy ($sftp_a, $path_a);
-    };
-    if ($@) {
-      show_msg ("SFTP error:$@\n");
-      return;
-    }
-  }
-
   open my $fh, '-|', 'diff', '-u', $path_a, $path_b or die "Can't open pipe: $!";
   my $out;
   $out .= $_ while <$fh>;
   close $fh;
   $out ? show_text ($out, "diff:$row{name}")
-    : show_msg ('info', text ('no differece found'));
+    : show_msg ('info', text ('no difference found'));
 }
 
-sub select_files_in_dir {
+sub select_files_in_dir_dlg {
   my $file = Result_List::selected_name ();
-  print "select_files_in_dir:$file\n";
+  #print "select_files_in_dir:$file\n";
+  show_msg ('error', 'select files on dir-name not allowed')
+    if is_dir_name ($file);
+
   my @path = split '/', $file;
-  pop @path; # remove file name
+  pop @path;			# remove file name
 
   my $dialog = Gtk2::Dialog->new (::text ("Directory synchronization"),
   				  $main_window,
@@ -1330,11 +1073,10 @@ sub select_files_in_dir {
 
   my $pp = '';
   for my $p (@path) {
-    $pp .= ($pp ? '/':'') . $p;
+    $pp .= $p . '/';
     $dir_entr->prepend_text ($pp);
   }
   $dir_entr->set_active (0);
-
 
   my %chk = (a_del  => 'del A',
 	     b_del  => 'del B',
@@ -1389,257 +1131,193 @@ sub select_files_in_dir {
     for my $k (keys %chk) {
       push @checks, $k if $chk{$k}->get_active;
     }
-    print "set checks:$path @checks\n";
+    #print "set checks:$path @checks\n";
     Result_List::set_checks_for_dir ($path, @checks)
-  }
-}
-
-sub gui_upd {
-  progress_next ();
-  while (Glib::MainContext->default->pending)
-    {Glib::MainContext->default->iteration (FALSE)};
-}
-
-sub create_local_path_list {
-  my ($start_dir, $res) = @_;
-  eval {
-    my $cnt = 0;
-    find ({wanted => sub {
-            die if $break_oper;
-            return if /^\.\.?$/;
-            my $path = decode ('utf8', $File::Find::name);
-	    my $p = substr $path, length $start_dir;
-            my %attr = get_file_info ($path);
-            $res->{$p} = {%attr} if $attr{type} eq 'file';
-            gui_upd (), $cnt = 0 if $cnt++ >= 20;
-	  }},
-	  encode ('utf8', $start_dir));
-  };
-  if ($@ and ! $break_oper) {
-    show_msg ('error', "Find file error: $@\n$start_dir");
-  }
-}
-
-sub sftp_tmp_copy {
-  my ($sftp, $path) = @_;
-
-  require File::Temp;
-
-  my ($name, $dir, $suff) = fileparse ($path,  qr/\.[^.]*$/);
-  my $tmp = File::Temp->new( TEMPLATE => "$name-$main_title-sftp-XXXXX",
-			     DIR      => '/tmp',
-                             SUFFIX   => $suff,
-			     UNLINK   => 0);
-  $sftp->get ($path, $tmp) or die "error get remote file\n'$path'\nto\n'$tmp'";
-  push @tmp_files, {file=>$tmp, orig=>$path, info=>'sftp'};
-  return $tmp;
-}
-
-sub create_sftp_path_list {
-  my ($sftp, $start_dir, $res) = @_;
-  eval {
-    $sftp->find ($start_dir,
-		 wanted =>
-		 sub {
-                   die if $break_oper;
-		   my $f = $_[1];
-		   my $n = $f->{filename};
-		   my $p = substr $n, length $start_dir;
-
-		   return if ! $p;
-
-		   # name(relative path) => attributes
-		   my $type = file_type_format ($f->{a}->perm);
-		   $res->{$p} = {type  => $type,
-				 size  => num_format ($f->{a}->size),
-				 ctime => '',
-				 mtime => time_format ($f->{a}->mtime),
-				 perm  => perm_format ($f->{a}->perm),
-				 owner => $f->{a}->uid . ':' . $f->{a}->gid,
-				 other => ''} if $type eq 'file';
-
-		   gui_upd();
-		 });
-  };
-  if ($@ and ! $break_oper) {
-    show_msg ('error', "Find remote files error: $@\n$start_dir");
-  }
-}
-
-sub create_path_list {
-  my ($sftp, $start_dir, $res) = @_;
-  $sftp ? create_sftp_path_list ($sftp, $start_dir, $res) :
-    create_local_path_list ($start_dir, $res);
-}
-
-sub comp_content {
-  my ($path_a, $path_b) = ($start_dir_a . '/'. Result_List::selected_name(),
-			   $start_dir_b . '/'. Result_List::selected_name());
-
-  if ($sftp_a) {
-    $path_a = eval {sftp_tmp_copy ($sftp_a, $path_a)};
-    if ($@) {
-      show_msg ("SFTP error:$@\n");
-      return;
     }
-  }
-
-  my $res = (compare ($path_a, $path_b) == 0 ?
-	     text ("Content is equevalent")
-	     : text ("Content is different"));
-  show_msg ('info', $res);
 }
 
-sub start_compare {
-  my $check_date = $chk_date->get_active;
-  my $check_content  = $chk_content->get_active;
-  my $check_size = $chk_size->get_active;
-  my $show_all = $chk_show_all->get_active;
+sub ignore_path_dlg {
+  my $file = Result_List::selected_name ();
+  my $is_dir = is_dir_name ($file);
 
-  ($start_dir_a, $start_dir_b) = ($dir_box_a->get, $dir_box_b->get);
-  $sftp_a = $dir_box_a->sftp;
+  my @path = split '/', $file;
 
-  if ($sftp_a and $check_content) {
-    show_msg ('error', text ('Check content not available with SFTP'));
-    return;
+  my $dialog = Gtk2::Dialog->new (::text ("Directory synchronization"),
+  				  $main_window,
+  				  ['modal', 'destroy-with-parent'],
+				  'gtk-cancel' => 'cancel',
+                                  'gtk-ok' => 'ok');
+  my $mainbox = Gtk2::VBox->new (FALSE, 20);
+  $dialog->vbox->add ($mainbox);
+
+
+  my $dir_entr = Gtk2::ComboBox->new_text;
+  $mainbox->pack_start ($dir_entr, FALSE, FALSE, 0);
+
+  my $hbox  = Gtk2::HBox->new ();
+  $mainbox->pack_start ($hbox, FALSE, FALSE, 0);
+
+  my $pp = '';
+  for (my $i = 0; $i <= $#path; $i++) {
+    $pp .= $path[$i];
+    $pp .= '/' if $i < $#path or $is_dir;
+    $dir_entr->prepend_text ($pp);
   }
-  Result_List::clear();
+  $dir_entr->set_active (0);
 
-  !$sftp_a and $start_dir_a ne $start_dir_b || return;
+  $dialog->show_all;
+  my $response = $dialog->run;
 
-  my (%names_a, %names_b);
-  progress_start (0, text ('get file-list') . ' A');
-  create_path_list ($sftp_a, $start_dir_a, \%names_a);
-  progress_reset (0, text ('get file-list') . ' B');
-  create_path_list (undef,   $start_dir_b, \%names_b);
-  progress_reset (0, text ('compare dirs'));
-  # print "LIST A:\n";
-  # map {print encode ('utf-8',$_),"\n"} sort keys %names_a;
-  # print "LIST B:\n";
-  # map {print encode ('utf-8',$_),"\n"} sort keys %names_b;
+  $dialog->destroy;
 
-  for my $f (keys %names_a) {
-    if (! exists $names_b{$f}) {
-      Result_List::add ($f, $names_a{$f}, '', 'A');
+  if ($response eq 'ok') {
+    my $path =  $dir_entr->get_active_text;
+    $is_dir = substr ($path, -1, 1) eq '/';
+
+    #print "ignore:$path\n";
+    Result_List::delete_path_match ($path, $is_dir);
+    if ($is_dir) {
+      push @ignored_dirs, $path;
+    } else {
+      push @ignored_files, $path;
     }
-    else {
-      my ($diff);
-      $check_size and $names_a{$f}->{size} ne $names_b{$f}->{size} and $diff .= 's';
-      $check_date and $names_a{$f}->{mtime} ne $names_b{$f}->{mtime} and $diff .= 't';
-
-      if ($check_content) {
-	 $diff .= 'c' if $names_a{$f}->{size} ne $names_b{$f}->{size} or
-	   compare ($start_dir_a .'/' . $f, $start_dir_b . '/' . $f);
-      }
-
-      ! $diff and $show_all and  $diff = '=';
-
-      Result_List::add ($f, $names_a{$f}, $names_b{$f}, $diff) if $diff;
-    }
-    progress_next ();
-  }
-
-  for my $f (keys %names_b) {
-    if (! exists $names_a{$f}) {
-      Result_List::add ($f, '', $names_b{$f}, 'B');
-    }
-    progress_next ();
-  }
-
-  progress_end ();
-
-  Result_List::row_count == 0 and ! $break_oper
-      and show_msg ('info', text ('No differences were found'));
-
-  Result_List::clear if $break_oper;
-}
-
-sub on_exit {
-  $break_oper = 1;
-  #gui_upd ();
-  Gtk2->main_quit;
-}
-
-sub menu_popup {
-  my ($widget, $event, $menu) = @_;
-  my @sel = Result_List::selected_inx();
-
-  if ($#sel == 0 and $event->button == 3) {# только для одной строчки
-
-    my $dtype = Result_List::diff_type ($sel[0]);
-
-    my $patt = 0;
-    $patt = 4 if not $sftp_a;
-    if ($dtype eq 'A')    {$patt |= 1}
-    elsif ($dtype eq 'B') {$patt |= 2}
-    else                  {$patt |= 3};
-
-    my $check = sub {my $opt = shift; return ($patt & $opt) == $opt;};
-    Menu::show ($menu, $check);
+    $clear_hidd_butt->set_sensitive (TRUE);
   }
 }
 
-sub dir_swap_focus {
-  $dir_box_a->focused ? $dir_box_b->focus : $dir_box_a->focus;
+
+## localization #############################################################
+sub text {
+  my $key = shift;
+  $lang eq 'en' and return $key;
+  #print "lang:$lang, key:$key->", $local_text {$key}->{$lang}, "\n";
+  exists $local_text {$key}->{$lang} ? return $local_text {$key}->{$lang} : return $key;
 }
 
-######################################################################
-# обработка клавиатуры
-sub window_press_key {
-  my ($widget, $event, $parameter)= @_;
-  my $key_nr = $event->keyval();
-  my $modif =  $event->state();
-
-  if ($modif >= ['control-mask'] and $key_nr == 113) { #ctrl-q
-    Gtk2->main_quit;
-  }
-  return FALSE;
+sub show_version {
+  print "$main_title $VERSION\n";
+  exit;
 }
 
-sub get_file_info {
-  my $name = shift;
-  my @par = lstat ($name);
-  #print Encode::encode('utf-8',$name), ", par:@par\n";
-  #               0 dev      device number of filesystem
-  #               1 ino      inode number
-  #               2 mode     file mode  (type and permissions)
-  #               3 nlink    number of (hard) links to the file
-  #               4 uid      numeric user ID of file's owner
-  #               5 gid      numeric group ID of file's owner
-  #               6 rdev     the device identifier (special files only)
-  #               7 size     total size of file, in bytes
-  #               8 atime    last access time in seconds since the epoch
-  #               9 mtime    last modify time in seconds since the epoch
-  #              10 ctime    inode change time in seconds since the epoch (*)
-  #              11 blksize  preferred block size for file system I/O
-  #              12 blocks   actual number of blocks allocated
+### clipboard ##################################################################
+sub clipboard_copy {
+  my $letter = shift;
+  my $path;
+  my $name = Result_List::selected_name();
+  $path = $dir_box_a->get .'/' . $name if $letter eq 'a';
+  $path = $dir_box_b->get .'/' . $name if $letter eq 'b';
 
-  my $type = file_type_format ($par[2]);
-  my $info;
-  if ($type eq 'l') {
-    $info = "-> ". readlink ($name);
-  }
-  if ($type eq 'c' or $type eq 'b') {
-    $info = rdev_format ($par[6]);
-  }
-  return (type  => $type,
-          size  => num_format($par[7]),
-          ctime => time_format($par[10]),
-          mtime => time_format($par[9]),
-          perm  => perm_format($par[2]),
-          owner => owner_format($par[4], $par[5]),
-          other => $info);
+  my $target_text = {
+		     target => 'UTF8_STRING', # some string representing the drag type
+		     flags => [],	      # Gtk2::TargetFlags
+		     info => 1,	# some app-defined integer identifier
+		    };
+
+  my $target_copy_file = {
+			  target => 'x-special/gnome-copied-files',
+			  flags => [], # Gtk2::TargetFlags
+			  info => 2, # some app-defined integer identifier
+			 };
+
+  my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
+  $clipboard->set_with_data (\&get_func, \&clear_func, [$path], # need list
+                             ($target_text, $target_copy_file));
+  $clipboard->store();
+
+  # "PRIMARY" - X selection
+  $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('PRIMARY', TRUE));
+  $clipboard->set_text ($path);
 }
 
-# функции форматирования данных для вывода
+sub get_func {
+  my ($clipboard, $selectiondata, $info, $names) = @_;
+  my $namestr;
+  # нужно экранировать пробелы (хвостовые в первую очередь)
+  # и другие символы, минимум это - " #%"
+  # аналогично g_file_new_for_path
+
+  $namestr = join "\n", files_uri (@$names);
+  # print "info:$info;names:'$namestr'\n";
+
+  if ($info == 1) {
+    $selectiondata->set ($selectiondata->target(), 8, join ("\n", @$names));
+  }
+  if ($info == 2) {
+    $selectiondata->set ($selectiondata->target(), 8,
+                         "copy\n" . $namestr);
+  }
+  if ($info == 3) {
+    $selectiondata->set ($selectiondata->target(), 8,
+                         "cut\n" . $namestr);
+    Result_List::delete_item (Result_List::selected_inx_0());
+  }
+}
+
+sub clear_func {
+  my ($self, $path) = @_;
+}
+# END clipboard #
+
+### utils ######################################################################
+sub rm_sp {
+  my $str = shift;
+  $str =~ s/^\s+//g;
+  $str =~ s/\s+$//g;
+  return $str;
+}
+
+# замена ~/ домашним каталогом
+sub home {
+  my $str = shift;
+  if ($str =~ /^~\//) {
+    $str =~ s/^~/decode ('utf-8', $ENV{HOME})/e;
+  }
+  return $str;
+}
+
+# замена ./ текущим  каталогом
+sub pwd {
+  my $str = shift;
+  if ($str =~ /^\.\//) {
+    $str =~ s/^\./decode ('utf-8', $ENV{PWD})/e;
+  }
+  return $str;
+}
+
+# замена переменной окружения $XXX её значением
+sub envar {
+  my $str = shift;
+  if ($str =~ /^\$.+\//) {
+    my $var = $&;
+    $var =~ s/\/$//;
+    $var =~ s/^\$//;
+    $str =~ s/^\$.+\//decode ('utf-8', $ENV{$var})/e;
+  }
+  return $str;
+}
+
 sub time_format {
-  my $tm = shift;
-  my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst)
-    = localtime($tm);
-
-  return sprintf "%4d-%02d-%02d %02d:%02d:%02d",
-                 $year+1900,$mon+1,$mday,$hour,$min,$sec;
+  my ($time, $format) = @_;
+  my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) =
+    localtime ($time);
+  $year += 1900;
+  $mon += 1;
+  if (! defined $format or $format eq 'f') {
+    return sprintf ("%04d-%02d-%02d %02d:%02d:%02d",
+		    $year,$mon,$mday,$hour,$min,$sec)
+    # full format for log - DEFAULT!
+  } elsif ($format eq 't') {
+    return sprintf ("%02d:%02d:%02d", $hour,$min,$sec);
+    # time only
+  } elsif ($format eq 'c') {
+    return sprintf ("%04d%02d%02d-%02d%02d%02d",
+		    $year,$mon,$mday,$hour,$min,$sec)}
+    # compact - for file names
+  else {
+    return "?format?";
+  }
 }
+
 
 sub num_format {
   my $x = shift;
@@ -1682,178 +1360,856 @@ sub owner_format {
 }
 
 sub rdev_format {
- return sprintf "%03d,%03d,%03d",
-                 ($_[0] >> 16) & 0xff,
-                 ($_[0] >> 8) & 0xff,
-                  $_[0] & 0xff;
+  return sprintf "%03d,%03d,%03d",
+    ($_[0] >> 16) & 0xff,
+    ($_[0] >> 8) & 0xff,
+    $_[0] & 0xff;
 }
 
-sub show_version {
-  print "$main_title $VERSION\n";
-  exit;
+sub files_uri {
+  my @res;
+  map {push @res,  'file://' . uri_escape ($_, q( ?<>{}#%`;"))} @_;
+  return @res;
 }
 
-## localization #############################################################
-sub text {
-  my $key = shift;
-  $lang eq 'en' and return $key;
-  #print "lang:$lang, key:$key->", $local_text {$key}->{$lang}, "\n";
-  exists $local_text {$key}->{$lang} ? return $local_text {$key}->{$lang} : return $key;
+sub dir_depth {
+  my $s = shift;
+  my $res = 0;
+  $res = 1 if substr ($s, 0, 1) ne '/';
+  $res-- if substr ($s, -1, 1) eq '/';
+  my $d = $s =~ tr[/][];
+  $res += $d;
+  return $res;
 }
 
-sub get_lang {
-  my ($x, $codepage) = split /\./, $ENV{LANG};
-  my ($language, $country) = split /_/, $x;
+### operation log window #######################################################
+{
+  package Oper_Log;
+  use strict;
+  use warnings;
+  use utf8;
+  use open ':utf8';
+  use Encode;
+  use Glib qw/TRUE FALSE/;
 
-  if ($codepage =~ /utf-?8/i) {
-    return lc ($language);
-  }
-  else {
-    return 'en';
-  }
-}
+  my $log_buffer;
+  my $glib_idle_id;
+  my $butt_ab;
+  my $butt_cl;
+  my $butt_sv;
+  my $end_date;
+  my $end_rx;
 
-## Clipboard ################################################################
-sub clipboard_copy {
-  my $letter = shift;
-  my $path;
-  my $name = Result_List::selected_name;
-  $path = $dir_box_a->get .'/' . $name if $letter eq 'a';
-  $path = $dir_box_b->get .'/' . $name if $letter eq 'b';
+  sub create {
+    my $window = Gtk2::Window->new ('toplevel');
+    $window->set_title ("$main_title:operations");
+    $window->set_size_request (640, 480);
+    my $mainbox = Gtk2::VBox->new ();
+    $window->add ($mainbox);
+    $window->set_modal(TRUE);
+    $window->set_icon ($icon_pixbuf);
+    $window->signal_connect (destroy => sub {log_close (undef,$window)});
 
-  my $target_text = {
-      target => 'UTF8_STRING', # some string representing the drag type
-      flags => [], # Gtk2::TargetFlags
-      info => 1,  # some app-defined integer identifier
-  };
+    my $textview = Gtk2::TextView->new();
 
-  my $target_copy_file = {
-      target => 'x-special/gnome-copied-files',
-      flags => [], # Gtk2::TargetFlags
-      info => 2,  # some app-defined integer identifier
-  };
+    $log_buffer = $textview->get_buffer();
 
-  my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
-  $clipboard->set_with_data (\&get_func, \&clear_func, [$path], # need list
-                             ($target_text, $target_copy_file));
-  $clipboard->store();
+    my $scroll = Gtk2::ScrolledWindow->new;
+    $scroll->set_policy ('automatic', 'automatic');
+    $scroll->add ($textview);
+    $mainbox->pack_start ($scroll, TRUE, TRUE, 0);
 
-  # "PRIMARY" - X selection
-  $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('PRIMARY', TRUE));
-  $clipboard->set_text ($path);
-}
+    $textview->set_editable (FALSE);
+    $textview->set_wrap_mode ('word');
 
 
-sub get_func {
-  my ($clipboard, $selectiondata, $info, $names) = @_;
-  my $namestr;
-  # нужно экранировать пробелы (хвостовые в первую очередь)
-  # и другие символы, минимум это - " #%"
-  # аналогично g_file_new_for_path
+    my $hbox = Gtk2::HBox->new (FALSE, 5);
+    $mainbox->pack_start($hbox, FALSE, FALSE, 0);
 
-  $namestr = join "\n", files_uri (@$names);
-  # print "info:$info;names:'$namestr'\n";
+    $butt_cl =  Gtk2::Button->new (::text ('Close'));
+    $butt_cl->signal_connect (clicked => \&log_close,
+			      $window);
+    $butt_cl->set_sensitive (FALSE);
 
-  if ($info == 1) {
-    $selectiondata->set ($selectiondata->target(), 8, join ("\n", @$names));
-  }
-  if ($info == 2) {
-    $selectiondata->set ($selectiondata->target(), 8,
-                         "copy\n" . $namestr);
-  }
-  if ($info == 3) {
-    $selectiondata->set ($selectiondata->target(), 8,
-                         "cut\n" . $namestr);
-    Result_List::delete_item (Result_List::selected_inx_0);
-  }
-}
+    $butt_sv =  Gtk2::Button->new (::text ('Save'));
+    $butt_sv->signal_connect (clicked => \&save,
+			      $window);
+    $butt_sv->set_sensitive (FALSE);
 
-sub clear_func {
-  my ($self, $path) = @_;
-}
 
-#---------------------------------------------------------------------------
-# обработка  строки директории
+    $butt_ab =  Gtk2::Button->new (::text ('Abort'));
+    $butt_ab->signal_connect (clicked =>
+			      sub {worker_break();
+				   add ('-- ABORT REQUESTED --');
+			          # $butt_ab->set_sensitive (FALSE);
+			      },
+			   $window);
 
-# удаление пробелов и замена специальных символов (имена директорий)
-sub rm_sp {
-  my $str = shift;
-  $str =~ s/^\s+//g;
-  $str =~ s/\s+$//g;
-  return $str;
-}
+    $hbox->pack_start ($butt_ab, TRUE, TRUE, 10);
+    $hbox->pack_start ($butt_sv, TRUE, TRUE, 10);
+    $hbox->pack_start ($butt_cl, TRUE, TRUE, 10);
 
-# замена ~/ домашним каталогом
-sub home {
-  my $str = shift;
-  if ($str =~ /^~\//) {
-    $str =~ s/^~/decode ('utf-8', $ENV{HOME})/e;
-  }
-  return $str;
-}
-
-# замена ./ текущим  каталогом
-sub pwd {
-  my $str = shift;
-  if ($str =~ /^\.\//) {
-    $str =~ s/^\./decode ('utf-8', $ENV{PWD})/e;
-  }
-  return $str;
-}
-
-# замена переменной окружения $XXX её значением
-sub envar {
-  my $str = shift;
-  if ($str =~ /^\$.+\//) {
-    my $var = $&;
-    $var =~ s/\/$//;
-    $var =~ s/^\$//;
-    $str =~ s/^\$.+\//decode ('utf-8', $ENV{$var})/e;
-  }
-  return $str;
-}
-
-sub show_help {
-  my $dialog = Gtk2::Dialog->new (text ('Help'),
-				  $main_window,
-				  ['modal', 'destroy-with-parent'],
-				  'gtk-ok'     => 'ok');
-
-  $dialog->set_size_request (640, 480);
-  my $textview = Gtk2::TextView->new();
-  my $scroll = Gtk2::ScrolledWindow->new;
-  $scroll->set_policy ('automatic', 'automatic');
-  $scroll->add ($textview);
-
-  $textview->set_editable (FALSE);
-  $textview->set_wrap_mode ('word');
-
-  my $buffer = $textview->get_buffer();
-  my $head_tag = $buffer->create_tag ('head',
-				      'foreground' => '#006600',
-				      'weight'     => 900);
-  my $start = $buffer->get_start_iter();
-  my $end;
-
-  for my $i (@{$help_text{$lang}}) {
-    $buffer->insert_with_tags ($start, $i->{title} . "\n\n", $head_tag);
-    $buffer->insert ($start, $i->{text} . "\n\n");
+    add (::time_format (time) . ' -- LOG CREATED -- ');
+    $end_rx = qr/(== END ==)|(== ABORT ==)/;
+    # нужна инициализация $end_rx здесь, иначе колбэк не видит значение (но видит переменную)
+    watch();
+    $window->show_all;
   }
 
-  $dialog->vbox->add ($scroll);
-  $dialog->show_all;
-  my $response = $dialog->run;
-  $dialog->destroy;
+  sub log_close {
+    my ($button, $window) = @_;
+    if (! $end_date) {
+      ::show_msg ('error', ::text ('operations in progress'));
+      return;
+    }
+    undef $log_buffer;
+    remove_watch();
+    $window->destroy;
+    ::start_compare();
+  }
+
+  sub add {
+    my $str = shift;
+    if (defined $log_buffer) {
+      my $iter = $log_buffer->get_end_iter();
+      $log_buffer->insert ($iter, $str . "\n");
+    }
+  }
+
+  # Glib  callback
+  sub update {
+    # print "update_operations_log\n";
+
+    while (my $msg = ::worker_get_message()) {
+      add ($msg);
+      #print "$msg\n";
+
+      if ($msg =~ $end_rx) {	# '== ABORTED ==' or '== END =='
+	undef $glib_idle_id;
+	oper_end();
+	return FALSE;
+      }
+    }
+    return TRUE;		# FALSE - uninstall callback
+  }
+
+  sub watch {
+    remove_watch();
+    # $glib_idle_id = Glib::Idle->add (\&update);
+    # Idle callback сильно грузит процессор
+    $glib_idle_id =  Glib::Timeout->add_seconds (1, \&update);
+  }
+
+  sub remove_watch {
+    if (defined $glib_idle_id) {
+      Glib::Source->remove ($glib_idle_id);
+      undef $glib_idle_id;
+    }
+  }
+
+  sub oper_end {
+    $butt_ab->set_sensitive (FALSE);
+    $butt_cl->set_sensitive (TRUE);
+    $end_date = ::time_format (time, 'c');
+    $butt_sv->set_sensitive (TRUE);
+  }
+
+  sub save {
+    my $dialog = Gtk2::FileChooserDialog->new
+      (::text ('Save log'),
+       undef,
+       'save',
+       'gtk-save'   => 'ok',
+       'gtk-cancel' => 'cancel');
+
+    $dialog->set_current_folder (decode ('utf-8', $ENV{HOME}));
+    $dialog->set_current_name ("dir-comp-$end_date.log");
+
+    if ($dialog->run eq 'ok') {
+      my $name = $dialog->get_filename;
+      print "save", $dialog->get_filename, "\n";
+      local *FILE;
+      if (open FILE, ">$name") {
+        print FILE $log_buffer->get_text ($log_buffer->get_start_iter,
+					  $log_buffer->get_end_iter,
+					  FALSE);
+	close FILE;
+      }
+      else {
+	::show_msg ('error', "Error open file '$name'");
+      }
+    }
+    $dialog->destroy;
+  }
+} # END operation log #
+
+
+# components ###################################################################
+package Menu;
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+sub create {
+  my $menu = Gtk2::Menu->new;
+
+  # $menu->append (Gtk2::TearoffMenuItem->new);
+
+  while (my $i = shift) {
+    my ($item, $name, $handler, $opt);
+    $name = $i->{caption};
+    $handler = $i->{handler} if exists $i->{handler};
+
+    if (exists $i->{opt}) {
+      $opt = $i->{opt}
+    } else {
+      $opt = 0;
+    }
+
+    if ($name eq '---') {
+      $item = Gtk2::SeparatorMenuItem->new ();
+    } else {
+      $item = Gtk2::MenuItem->new_with_label (::text ($name));
+      $item->signal_connect ('activate' => $handler);
+      $item->set_property ('name', $name);
+    }
+
+    $item->set_property ('user-data', $opt);
+    $menu->append ($item);
+  }
+  $menu->signal_connect ('hide' => \&Menu::hide);
+  $menu->show_all;
+  return $menu;
 }
 
+sub show {
+  my ($menu, $check_callback) = @_;
+  my @list = $menu->get_children;
 
-END {
-  $dir_box_a->sftp_disconnect if $dir_box_a;
-  for my $f (@tmp_files) {
-    print STDERR "cleanup tmp:$f->{file}\n";
-    unlink $f->{file};
+  for my $i (@list) {
+    my $ud = $i->get_property ('user-data');
+    next if not $ud;
+
+    if (! &$check_callback ($ud)) {
+      $i->set_sensitive (FALSE);
+    }
+  }
+  $menu->popup (undef, undef, undef, undef, 0, 0);
+}
+
+sub hide {
+  my ($menu, $event) = @_;
+  my @list = $menu->get_children;
+  for my $i (@list) {
+    $i->set_sensitive (TRUE);
   }
 }
+# END Menu #####################################################################
+{
+  package Dir_Box;
+  use utf8;
+  use Glib qw/TRUE FALSE/;
+
+  my $file_dialog_run;
+
+  sub new {
+    my $class = shift;
+    my %opt = @_;
+
+    my $self = {};
+    bless ($self, $class);
+    $self->{label} = $opt{label};
+
+    my $hbox = Gtk2::HBox->new();
+    my $entry = Gtk2::Entry->new;
+    $hbox -> pack_end ($entry, TRUE, TRUE, 0);
+
+    my $butt = Gtk2::Button->new ($self->{label});
+    $hbox->pack_start ($butt, FALSE, FALSE, 0);
+    $butt->signal_connect (clicked => $file_dialog_run, $self);
+    $butt->set_size_request (50);
+    $self->{entry} = $entry;
+    $self->{box}   = $hbox;
+
+    return  $self;
+  }
+
+
+  sub tree_path {
+    my ($tree_view, $iter) = @_;
+    my $model = $tree_view->get_model();
+    my $dir_path;
+
+    while ($iter) {
+      my $name = $model->get_value ($iter);
+      $dir_path = $name . '/' . $dir_path;
+      $iter = $model->iter_parent ($iter);
+    }
+    return '/' . $dir_path;
+  }
+
+  sub set_handler {
+    my ($self, $handler) = @_;
+    $self->{entry}->signal_connect ('changed' => $handler);
+  }
+
+  sub get {
+    my $self = shift;
+    my $path = ::envar (::pwd (::home (::rm_sp ($self->{entry}->get_text))));
+    $path =~ s/\/$//;
+    set ($self, $path);
+    return $path;
+  }
+
+  sub set {
+    my ($self, $str) = @_;
+    $self->{entry}->set_text ($str);
+  }
+
+  sub focus {
+    my $self = shift;
+    return $self ->{entry}->grab_focus;
+  }
+
+  BEGIN {
+    $file_dialog_run =
+      sub {
+	my ($widget, $self) = @_;
+	my $caption = $self->{label};
+
+	my $dialog = Gtk2::FileChooserDialog->new
+	  (::text ('Select dir') . ' ' . $caption,
+	   undef,
+	   'select-folder',
+	   'gtk-ok'     => 'ok',
+	   'gtk-cancel' => 'cancel');
+
+	$dialog->set_current_folder ($self->{entry}->get_text);
+
+	my $filter = Gtk2::FileFilter->new;
+	$filter->add_mime_type ('inode/directory');
+
+	$dialog->set_filter ($filter);
+
+	if ( $dialog->run eq 'ok') {
+	  $self->{entry}->set_text ($dialog->get_filename);
+	  ::re_init();
+	}
+	$dialog->destroy;
+      };
+  }
+}
+# END Dir_Box ##################################################################
+
+package Selector;
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+sub new {
+  my $class = shift;
+
+  my $self = {};
+  bless ($self, $class);
+
+  my $hbox = Gtk2::HBox->new();
+
+  my $combo = Gtk2::ComboBox->new_text;
+  $hbox -> pack_end ($combo, TRUE, TRUE, 0);
+
+  my @vals;
+  while (my $k = shift @_) {
+    my $lb = shift;
+    $combo->append_text ($lb);
+    push @vals, $k;
+  }
+
+  $combo->set_active (0);
+  $self->{combo} = $combo;
+  $self->{box}   = $hbox;
+  $self->{vals} = [@vals];
+
+  return  $self;
+}
+
+sub set_label {
+  my $self = shift;
+  my $lb = Gtk2::Label->new(shift);
+  $self->box->pack_start ($lb, FALSE, FALSE, 0);
+}
+
+sub set_size {
+  my $self = shift;
+  $self->{combo}->set_size_request (shift);
+}
+
+# return string value instead indeax in combo or lable text
+sub get {
+  my $self = shift;
+  return $self->{vals}[$self->{combo}->get_active];
+}
+# END Selector #################################################################
+
+{
+  package Result_List;
+
+  use utf8;
+  use Glib qw/TRUE FALSE/;
+  use Gtk2::SimpleList;
+  use File::Basename;
+
+  my @clmns;
+  my %clm; # index columns numbers on id
+  my @row_color;
+
+  BEGIN {
+    @clmns =
+      ({id=>'mark',    caption=> '',              type=>'text', align=> 0},
+       {id=>'name',    caption=>::text ('name'),  type=>'text', align=> 0},
+       {id=>'diff',    caption=>::text ('diff'),  type=>'text', align=> 0.5},
+       {id=>'a_cp',    caption=>'A->B',  type=>'bool', align=> 0.5},
+       {id=>'a_del',   caption=>'del A', type=>'bool', align=> 0.5},
+       {id=>'b_cp',    caption=>'B->A',  type=>'bool', align=> 0.5},
+       {id=>'b_del',   caption=>'del B', type=>'bool', align=> 0.5},
+       {id=>'type_a',   caption=>'type A', type=>'text', align=> 0},
+       {id=>'type_b',   caption=>'type B', type=>'text', align=> 0},
+       {id=>'size_a',  caption=>::text ('size A'),type=>'text', align=> 1},
+       {id=>'size_b',  caption=>::text ('size B'),type=>'text', align=> 1},
+       {id=>'time_a',  caption=>::text ('time A'),type=>'text', align=> 0},
+       {id=>'time_b',  caption=>::text ('time B'),type=>'text', align=> 0},
+       {id=>'perm_a',  caption=>::text ('perm A'),type=>'text', align=> 0},
+       {id=>'perm_b',  caption=>::text ('perm B'),type=>'text', align=> 0},
+       {id=>'owner_a', caption=>::text ('own A'), type=>'text', align=> 0},
+       {id=>'owner_b', caption=>::text ('own B'), type=>'text', align=> 0},
+       #    {id=>'flags',   caption=>'flags',          type=>'text', align=> 0});# for debug
+       {id=>'flags',   caption=>'flags',          type=>'hidden', align=> 0});
+
+    @row_color = (Gtk2::Gdk::Color->new (0xFFFF, 0xFFFF, 0xFFFF),
+		  Gtk2::Gdk::Color->new (0xE8FF, 0xE8FF, 0xE8FF));
+
+    for (my $i = 0; $i <= $#clmns; $i++) {
+      $clm{$clmns[$i]{id}} = $i;
+    }
+  }
+
+  my $list;
+  my $scroll;
+  my @save_selection;
+
+  # private functions refs
+  my $click_column_hnd;
+  my $check_box_hnd;
+  my $sel_change_hnd;
+  my $col_randr_func;
+  my $sort_int_func;
+  my $is_cell_visible;
+  my $is_cell_visb;
+  my $is_sensitive;
+  my $set_sensitive_flg;
+  my $uncheck_dis_dir_files;
+  my $validate_sel;
+
+  sub create {
+    $list = Gtk2::SimpleList->new (map {($_->{caption}, $_->{type})} @clmns);
+    #$list->signal_connect('' => \&Result_List::list_click_hnd);
+
+    for (my $i = 0; $i <= $#clmns; $i++) {
+      my $clm = $list -> get_column ($i);
+      if ($clmns[$i]{type} ne 'hidden' ) {
+	$clm->set_clickable(TRUE);
+	$clm->set_resizable(TRUE);
+	$clm->set_sort_column_id($i);
+
+	$clm->signal_connect('clicked' => $click_column_hnd);
+
+	my $r = $clm->get_cell_renderers;
+
+	$r->set('xalign', $clmns[$i]{align});
+	if ($clmns[$i]{type} eq 'bool') {
+	  $r->signal_connect ('toggled' => $check_box_hnd);
+
+	}
+	$clm->set_cell_data_func ($r, $col_randr_func, $i);
+      }
+    }
+
+    $list->get_selection->set_mode ('multiple');
+    $list->get_selection->signal_connect ('changed' => $sel_change_hnd);
+    $list->get_model->set_sort_func ($clm{size_a},
+				     $sort_int_func,
+				     $clm{size_a}); # sort size A
+    $list->get_model->set_sort_func ($clm{size_b},
+				     $sort_int_func,
+				     $clm{size_b}); # sort size B
+
+    $scroll = Gtk2::ScrolledWindow->new;
+    $scroll -> set_policy ('automatic', 'automatic');
+    $scroll -> add ($list);
+
+    $list->signal_connect('button-press-event' => sub {
+			    my ($widget,$event) = @_;
+			    if ($event->button == 3) {
+			      my @sel = Result_List::selected_inx();
+			      return TRUE if $#sel > 0;
+			      # not propogate event in list
+			    } else {
+			      FALSE;
+			    }
+			  });
+  }
+
+  sub mark {
+    my $i = shift;
+    return $list->{data}->[$i]->[$clm{mark}];
+  }
+
+  sub clear {
+    $list->get_model->clear;
+  }
+
+  sub add {
+    my ($name, $info_a, $info_b, $diff) = @_;
+    $name =~ s/^\///;
+
+    my @data;
+    my $mark;
+
+    if ($diff eq 'X') {
+      $mark = 'X';
+    }
+    elsif ($diff eq 'B') {
+      $mark = $info_b->{type};
+    }
+    else {
+      $mark = $info_a->{type};
+    }
+    $mark = '*' if $mark ~~ ['char', 'link', 'pipe', 'sock', 'block'];
+    $mark = '' if $mark eq 'file';
+    $mark = 'D' if $mark eq 'dir';
+
+    my $flags = '';
+    if ($diff eq 'X' or $mark eq '*') {
+      # не показывать чекбоксы для специальных файлов и разнотипных
+      $flags = '000';
+    } else {
+      $flags .= ($diff eq 'B' ?'0':'1'); # enable copy from A/del A
+      $flags .= ($diff eq 'A' ?'0':'1'); # enable copy from B/del B
+      $flags .= '1';
+    }
+
+    $data[$clm{mark}]    = $mark;
+    $data[$clm{name}]    = $name . ($data[$clm{mark}] eq 'D' ?'/':'');
+    $data[$clm{diff}]    = $diff;
+    $data[$clm{type_a}]  = $info_a->{type};
+    $data[$clm{type_b}]  = $info_b->{type};
+    $data[$clm{size_a}]  = $info_a->{size};
+    $data[$clm{size_b}]  = $info_b->{size};
+    $data[$clm{time_a}]  = $info_a->{mtime};
+    $data[$clm{time_b}]  = $info_b->{mtime};
+    $data[$clm{perm_a}]  = $info_a->{perm};
+    $data[$clm{perm_b}]  = $info_b->{perm};
+    $data[$clm{owner_a}] = $info_a->{owner};
+    $data[$clm{owner_b}] = $info_b->{owner};
+    $data[$clm{a_del}]   = FALSE;
+    $data[$clm{b_del}]   = FALSE;
+    $data[$clm{a_cp}]    = FALSE;
+    $data[$clm{b_cp}]    = FALSE;
+    $data[$clm{flags}] = $flags;
+
+    push @{$list->{data}}, [@data];
+  }
+
+
+  sub get_oper_inx_list {
+    my $result = shift;
+    my $l = $list->{data};
+    my $c = row_count();
+
+    for (my $i = 0; $i < $c; $i++) {
+      push @$result, $i if $l->[$i]->[$clm{a_del}]
+	or $l->[$i]->[$clm{b_del}]
+	or $l->[$i]->[$clm{a_cp}]
+	or $l->[$i]->[$clm{b_cp}];
+    }
+  }
+
+  sub selected_inx_0 {
+    my @sel = $list->get_selected_indices();
+    return $sel[0];
+  }
+
+  sub selected_inx {
+    return $list->get_selected_indices();
+  }
+
+  # имя выбранного файла
+  sub selected_name {
+    my $inx = selected_inx_0();
+    return @{$list->{data}}[$inx]->[$clm{name}];
+  }
+
+  sub diff_type {
+    my $inx = shift;
+    return @{$list->{data}}[$inx]->[$clm{diff}];
+  }
+
+  sub name {
+    return @{$list->{data}}[shift]->[$clm{name}];
+  }
+
+  sub row {
+    my $inx = shift;
+    return map {$_ => @{$list->{data}}[$inx]->[$clm{$_}]} keys %clm;
+  }
+
+  sub delete_item {
+    my $n = shift;
+    splice @{$list->{data}}, $n, 1;
+  }
+
+  sub grab_focus {
+    $list->grab_focus;
+  }
+
+  sub row_count {
+    return $#{$list->{data}} + 1;
+  }
+
+  sub box {
+    return $scroll;
+  }
+
+  sub set_checks_for_dir {
+    my $path = shift;
+    my @checks = @_;
+
+    for (my $i = 0; $i <= $#{$list->{data}}; $i++) {
+      my $p = substr $list->{data}->[$i]->[$clm{name}], 0, length $path;
+
+      if ($p eq $path) {
+	#print $list->{data}->[$i]->[$clm{name}],  "\n";
+	for my $c ('a_cp', 'a_del', 'b_cp', 'b_del') {
+	  $list->{data}->[$i]->[$clm{$c}] = FALSE;
+	}
+
+	for my $c (@checks) {
+	  if (&$is_cell_visible ($i, $clm{$c})) {
+	    $list->{data}->[$i]->[$clm{$c}] = TRUE;
+	  }
+	}
+      }
+    }
+  }
+
+  sub delete_path_match {
+    my ($path, $is_dir) = @_;
+
+    my $model = $list->get_model;
+    my $iter = $model->get_iter_first;
+
+    while (defined $iter) {
+      my $name = $model->get_value ($iter, $clm{name});
+      my $p = ($is_dir ? substr ($name, 0, length $path) : $name);
+
+      if ($p eq $path) {
+	#print "ig:$name\n";
+	my $next = $model->iter_next ($iter);
+
+	$model->remove ($iter);
+	$iter = $next;
+      } else {
+	$iter = $model->iter_next ($iter);
+      }
+    }
+  }
+
+  sub size_to_int {
+    my $s = shift;
+    $s =~ s/_//g;
+    return int($s);
+  }
+
+  BEGIN {
+    $click_column_hnd =
+      sub {
+	my ($widget, $data) = @_;
+	#print "click_column_hnd\n";
+      }; # end click_column_hnd
+
+    $check_box_hnd =
+      sub {
+	my ($renderer, $row) = @_;
+	my $col = $renderer->{column_index};
+	my $model = $list->get_model;
+	#print "check_box_hnd:$row,$col\n";
+
+	my $val = $list->{data}->[$row]->[$col];
+
+	@save_selection = selected_inx(); #save to restore
+
+	my $check_on_sel = 0;
+
+	for my $k (@save_selection) {
+	  if ($k == $row) {
+	    # click on in selection area
+	    $check_on_sel = 1;
+	    last;
+	  }
+	}
+
+	if ($check_on_sel) {
+	  my $sel_type = &$validate_sel (\@save_selection);
+	  #print "sel_type:$sel_type\n";
+
+	  if ($sel_type eq 'E') {
+	    $list->{data}->[$row]->[$col] = ! $val;
+	    ::show_msg ('error', ::text ('file-types mix not allowed'));
+	    return;
+	  }
+
+	  if ($#save_selection > 0
+	      and $row >= $save_selection[0]
+	      and $row <= $save_selection[$#save_selection]) {
+
+	    for my $i (@save_selection) {
+	      if (&$is_cell_visible ($i, $col)) {
+		$list->{data}->[$i]->[$col] = $val;
+	      }
+	    }
+	  }
+
+	  &$uncheck_dis_dir_files (\@save_selection, $val) if $sel_type eq 'D';
+	} else {
+	  @save_selection = ();	# delete selection
+	  &$uncheck_dis_dir_files ([$row], $val) if mark ($row) eq 'D';
+	}
+      }; #end check_box_hnd
+
+    $col_randr_func =
+      sub {
+	my ($column, $renderer, $model, $iter, $col_index) = @_;
+	my $id = $clmns[$col_index]{id};
+
+	if ($clmns[$col_index]{type} eq 'bool') {
+	  my $dtype  = ($model->get ($iter))[$clm{diff}];
+	  my $flags = $model->get_value ($iter, $clm{flags});
+
+	  if (&$is_cell_visb ($col_index, $flags)) {
+	    $renderer->set('visible', TRUE);
+
+	  } else {
+	    $renderer->set('visible', FALSE);
+	  }
+
+	  $renderer->set('sensitive' , FALSE);
+
+	  if (! &$is_sensitive ($flags) ) {
+	    $renderer->set('sensitive' , FALSE);
+	    $renderer->set('activatable', FALSE);
+
+	  } else {
+	    $renderer->set('sensitive', TRUE);
+	    $renderer->set('activatable', TRUE);
+	  }
+	} else {
+	  my $path = $model->get_string_from_iter ($iter);
+	  my $color_inx = $path % 2;
+	  $renderer->set('cell-background-gdk' => $row_color[$color_inx]);
+	}
+      }; # end col_randr_func
+
+    $sort_int_func =
+      sub {
+	my $col_num = pop;
+	my ($list, @iter) = @_;
+	@iter = map {$_ = $list->get($_, $col_num); $_=~s/_//g; $_} @iter;
+	return ($iter[0] <=> $iter[1]);
+      }; # end sort_int_func
+
+    $sel_change_hnd =
+      sub {
+	#my $selection = shift;
+	$list->select (@save_selection);
+	@save_selection = ();
+      }; # end sel_change_hnd
+
+    $is_cell_visible =
+      sub {
+	my ($row, $col) = @_;
+	return &$is_cell_visb ($col, $list->{data}->[$row]->[$clm{flags}]);
+      }; # end is_cell_visible
+
+    $is_cell_visb =
+      sub {
+	my ($col, $flags) = @_;
+	if ($col == $clm{a_cp} or $col == $clm{a_del}) {
+	  return substr $flags, 0, 1;
+	} elsif ($col == $clm{b_cp} or $col == $clm{b_del}) {
+	  return substr $flags, 1, 1;
+	} else {return '1'}
+      }; # end is_cell_visb
+
+    $is_sensitive =
+      sub {
+	my $flags = shift;
+	return substr $flags,2,1;
+      }; # end is_sensitive
+
+    $set_sensitive_flg =
+      sub {
+	my ($row, $flag) = @_;
+	# print "set_sensitive_flg:$row, $flag\n";
+	my $flags = $list->{data}->[$row]->[$clm{flags}];
+	my @bits = unpack ("aaa", $flags);
+	$bits[2] = $flag;	# index of enable flag
+	my $fl = pack ("aaa", @bits);
+	$list->{data}->[$row]->[$clm{flags}] = $fl;
+      }; # end set_sensitive_flg
+
+    $uncheck_dis_dir_files =
+      sub {
+	my ($indexes, $value) = @_;
+	my $model = $list->get_model;
+
+	for my $inx (@$indexes) {
+	  my $dir = name ($inx);
+	  my $iter = $model->get_iter_first;
+
+	  for (my $i = 0; $i <= $#{$list->{data}}; $i++) {
+	    my $name = $list->{data}->[$i]->[$clm{name}];
+	    my $p = substr $name, 0, length $dir;
+	    if ($p eq $dir and $name ne $dir) {
+	      if ($value) {
+		$list->{data}->[$i]->[$clm{a_cp}] = FALSE;
+		$list->{data}->[$i]->[$clm{b_cp}] = FALSE;
+		$list->{data}->[$i]->[$clm{a_del}] = FALSE;
+		$list->{data}->[$i]->[$clm{b_del}] = FALSE;
+
+		&$set_sensitive_flg ($i, '0');
+	      } else {
+		&$set_sensitive_flg ($i, '1');
+	      }
+	    }
+	  }
+	}
+      }; # end uncheck_dis_dir_files
+
+    $validate_sel =
+      sub {
+	my $sel = shift;
+	my $m;
+
+	for my $i (@{$sel}) {
+	  $m = mark ($i) if not $m;
+	  return 'E' if mark ($i) ne $m;
+	  # нельзя смешивать файлы и директории
+	}
+	return $m;
+      }; # end validate_sel
+
+  } # BEGIN
+}
+# END Result_List ####################################################
+
+package main;
 
 BEGIN {
   $icon_data =<<END_ICON;
@@ -1891,10 +2247,14 @@ END_ICON
                  'content'               => {ru => 'содержимое'},
                  'Open A'                => {ru => 'Открыть A'},
 		 'Open B'                => {ru => 'Открыть B'},
+		 'Rename A'                => {ru => 'Переименовать A'},
+		 'Rename B'                => {ru => 'Переименовать B'},
 		 'Copy A to clipboard'   => {ru => 'Копировать A в буфер'},
                  'Copy B to clipboard'   => {ru => 'Копировать B в буфер'},
                  'diff A and B'          => {ru => 'diff A и B'},
 		 'comp A and B content ' => {ru => 'Сравнить содержимое A и B'},
+		 'Set flags ..' => {ru => 'Проставить флажки ..'},
+		 'Hide records ..' => {ru => 'Скрыть записи ..'},
                  'Execute'               => {ru => 'Выполнить'},
                  'Exit'                  => {ru => 'Выход'},
                  'Execute all operation?'=> {ru => 'Выполнить все операции?'},
@@ -1907,6 +2267,8 @@ END_ICON
 		 'show all'              => {ru => 'показать все'},
                  'Help'                  => {ru => 'Справка'},
                  'Abort'                 => {ru => 'Прервать'},
+		 'Save'                  => {ru => 'Сохранить'},
+		 'Close'                 => {ru => 'Закрыть'},
                  'get file-list'         => {ru => 'получаю список файлов'},
                  'compare dirs'          => {ru => 'сравнение директорий'},
                  'Content is equevalent' => {ru => 'Содержимое совпадает'},
@@ -1915,98 +2277,90 @@ END_ICON
                  'Select dir'            => {ru => 'Выбрать каталог'},
                  'Disconnect'            => {ru => 'Отключиться'},
                  'Not connected'         => {ru => 'Не подключено'},
+		 'Clear hidden list'     => {ru => 'Очистить список скрытых'},
+		 'show dirs'             => {ru => 'показать директории'},
+		 'search depth'          => {ru => 'глубина поиска'},
 		);
 
   %help_text = (en => [
 		       {title => 'Overview',
 			text  =>
-"Program compares two directories and allows to synchronize them with full manual control."
-. "\n One of the directories may be remote and accessible via SFTP."
+			"Program compares two directories and allows to synchronize them with full manual control."
+			. "\n For remote sychronisation need mount a remote directory into the local filesystem."
 		       },
 		       {title => 'Compare',
 			text  =>
-"Comparison starts on click 'Compare' button."
-. "\nAfter compare succesfull, different files is shown in result list. The 'diff'-column contanes one or more letters which indicate the difference:"
-. "\n\tA - file exists only in dir A, B - file exists only in dir B."
-. "\nIf one or more options are checked check-boxes 'size', 'time', 'content', "
-."There are some options 'size', 'time', 'content'. If one or more options are checked, additional information are compared and it shows
+			"Comparison starts on click 'Compare' button."
+			. "\nAfter compare succesfull, different files is shown in result list. The 'diff'-column contanes one or more letters which indicate the difference:"
+			. "\n\tA - file exists only in dir A, B - file exists only in dir B."
+			. "\nIf one or more options are checked check-boxes 'size', 'time', 'content', "
+			."There are some options 'size', 'time', 'content'. If one or more options are checked, additional information are compared and it shows
 letters"
-. "further compares file-attributes and shows letters:"
-. "\n\ts\tdifferent size"
-. "\n\tt\tdifferent time"
-. "\n\tc\tdifferent file content"
-. "\n\t=\tdifferents not found,  but checked option 'show all', it allows you to view these files
+			. "further compares file-attributes and shows letters:"
+			. "\n\ts\tdifferent size"
+			. "\n\tt\tdifferent time"
+			. "\n\tc\tdifferent file content"
+			. "\n\t=\tdifferents not found,  but checked option 'show all', it allows you to view these files
 and test them with any other method."
-. "\n Result list shows only ordinary files. Special files (socket, pipe, device) and directories not compares and not shows in result list."
+			. "\n Result list shows only ordinary files. Special files (socket, pipe, device) and directories not compares and not shows in result list."
 		       },
 		       {title => 'Operation',
 			text  =>
-"After comparing the files, you can copy, move files from one directory to another or delete files."
-. " For this you need set checkboxes in result list and click 'Execute' button."
-. "\n\tA->B\tcopy file from A into B (with replace file and create path if need)"
-. "\n\tdel A\tdelete file from A directory"
-. "\nIf for any file selected 'copy' and 'delete' operation, actually will be performed 'move' operation (if it possible)."
-		       },
-		       {title => 'Remote compare and synchronization (SFTP)',
-			text  =>
-"For use this feature you need install Net::SFTP::Foreign Perl module. It exists in many Linux repo and CPAN."
-. "\nRemote host should allow SSH login."
-. "\nGenerally use of SFTP similar to work with local directories, but for diff and view file, "
-. "remote file will be downloaded into /tmp."
+			"After comparing the files, you can copy, move files from one directory to another or delete files."
+			. " For this you need set checkboxes in result list and click 'Execute' button."
+			. "\n\tA->B\tcopy file from A into B (with replace file and create path if need)"
+			. "\n\tdel A\tdelete file from A directory"
+			. "\nIf for any file selected 'copy' and 'delete' operation, actually will be performed 'move' operation (if it possible)."
 		       },
 		       {title => 'Context menu',
 			text  =>
-"Context menu (on right-click) provides additional features as diff, view file and copy it into any other directory."
+			"Context menu (on right-click) provides additional features as diff, view file and copy it into any other directory."
 		       },
 
 		      ],
 		ru => [
 		       {title =>'Общие сведения',
 			text  =>
-"Программа выполняет сравнение двух директорий по составу файлов и их параметрам"
-." и дальнейшую их синхронизацию с полным ручным контролем."
-."\nОдна из директорий может быть удалённой и доступной по протоколу SFTP."
+			"Программа выполняет сравнение двух директорий по составу файлов и их параметрам"
+			." и дальнейшую их синхронизацию с полным ручным контролем."
+			."\nДля сравнениия локальной директории с директорией на другом компьютере нужно смонтировать удалённую файловую систему, например, с помощью gvfs-mount."
 		       },
 		       {title => 'Сравнение директорий',
 			text  =>
-"В результирующем списке сравнения показываются только обычные файлы, директории и специальные файлы"
-." (файлы устройств, сокеты, каналы) не показываются."
-." Также файлы могут быть не показаны, если чтение каталога запрещено данному пользователю."
-."\nДля каждого файла в графе 'отлич' проставляются символы, кратко обозначающие найденные отличия."
-." Если файл присутствует только в одном каталоге проставляется сответственно символ A или B,"
-." в остальных случаях в зависимости от результатов сравнения."
-."\nОпции сравнения:"
-."\n\t'размер'   \tсравнивать размер файлов, проставляет флажок 's'"
-."\n\t'время'    \tсравнивать время модификации файлов (mtime), проставляет флажок 't'"
-."\n\t'содержимое'\tсравнивать размер файлов, проставляет флажок 'c'"
-."\n\t'показать всё'\tпоказать также файлы отличий в которых не найдено, для них проставляет флажок '='"
-		       },
+			"Выпадающий список слева устанавливает режим синхронизации двухстронняя или односторонняя (A<->B, A->B, B->A). В случае двухсторонней синхронизации в с списке отличий будут показываться файлы отсутствующие в ЛЮБОЙ из двух директорий или отличающиеся параметрами (в соответствии с установленными флажками). Это режим по умолчанию. В случае одностороней синхронизации, например A->B, учитываются только те файлы, которые присутствуют в директории A. Это позволяет сократить список, ускорить сравнение и операции и уменьшить использование ресурсов."
+			. "\n\nВ результирующем списке сравнения показываются файлы (и, возможно, директории) которые имеют отличия в соответствии с установленными флажками."
+			."\n\nДля каждого файла в графе 'отлич' проставляются символы, кратко обозначающие найденные отличия."
+			." Если файл присутствует только в одном каталоге проставляется сответственно символ A или B,"
+			." в остальных случаях в зависимости от результатов сравнения."
+			."\n\nОпции сравнения:"
+			."\n\t'размер'   \t - сравнивать размер файлов, проставляется флажок 's'"
+			."\n\t'время'    \t - сравнивать время модификации файлов (mtime), флажок 't'"
+			."\n\t'содержимое'\t - сравнивать размер файлов, флажок 'c'"
+
+			."\n\t'показать директории'\t - по умолчанию показываются пути к файлам, при установке этого флажка будут показаны также отличающиеся директории; отличием считается присутствие директории ТОЛЬКО в одном каталоге (А или B), никакие параметры директорий не сравниваются; показ директорий позволяет задать рекурсивное копирование директории (с переписыванием), без необходимости выделять файлы по отдельности"
+			."\n\t'показать всё'\t - показать также файлы отличий в которых не найдено, для них проставляется флажок '=', для директорий присутствующих в A и B одновременно, проставляется AB (если проставлен 'показать директории')"
+			."\n\t'глубина поиска'\tограничение глубины поиска (0 - не ограничено) позволяет ограничить список отличий и синхронизировать директории последовательными шагами, начиная с верхнего уровня с полностью отсутствующих под-директорий"
+			."\n\nВ крайне левой гарфе ставится однобуквенный Маркер, отмечающий особенности данной записи в плане возможностей синхронизации:"
+			."\n\t'D'\t - директория, возможно рекурсивное копирование директории вместе с файлами"
+			."\n\t'*'\t - специальный файл, синхронизация невозможна"
+			."\n\t'X'\t - разные типы файлов, синхронизация невозможна"
+			."\n\nФайлы могут быть не показаны в списке, если чтение каталога запрещено данному пользователю."		       },
 		       {title => 'Операции',
 			text  =>
-"Операции над файлами (копирование, преремещение, удаление) выбираются установкой флажков:"
-."\n\tA->B\tкопировать из директории A в B с заменой"
-."\n\tdel A\t удалить файл из директории A"
-."\nаналогично два остальных флажка.\nНа локальных каталогах при установки флажков копирования и удаления"
-." в действительности выполняется перемещение файла, что часто экономичнее."
-."\nВ соответствии с предварительно установленными флажками,"
-." по нажатию кнопки 'выполнить' все операции над файлами выполняются."
-		      },
-		       {title => 'Удалённые сравнения и синхронизация (SFTP)',
-			text  =>
-"Для использования SFTP должен быть установлен Perl-пакет Net::SFTP::Foreign,"
-." обычно это можно сделать посредством пакетного менеджера дистрибутива."
-."\nНа удалённой машине должен организован доступ по SSH."
-."\nВ целом работа через SFTP аналогична работе с локальными директориями, но для некоторых операций (открытие файла, diff, сравнение содержимого) выполняется скачивание файла с удалённой машины в локальную директорию /tmp."
-."\nПри нажатии на кнопку 'SFTP' открывается диалог, позволяющий подключиться к удалённой машине и просмотреть каталоги."
-." В случае каких-либо проблем с соединением, попробуйте войти на удалённую машину клиентом SSH и обычным клиентом SFTP,"
-. " которые есть в составе любого дистрибутива Linux."
-
+			"Операции над файлами (копирование, преремещение, удаление) выбираются установкой флажков:"
+			."\n\tA->B\tкопировать из директории A в B с заменой"
+			."\n\tdel A\t удалить файл из директории A"
+			."\nаналогично два остальных флажка.\nНа локальных каталогах при установки флажков копирования и удаления"
+			." в действительности выполняется перемещение файла, что часто экономичнее."
+			."\n\nВ соответствии с предварительно установленными флажками,"
+			." по нажатию кнопки 'выполнить' все операции над файлами выполняются."
+			."\n\nХод исполнения и ошибки отображаются в открывающемсе окне лога. Успешное окончание отмечается записью '== END =='."
 		       },
 		       {title => 'Контекстное меню',
 			text  =>
-"Контекстное меню предоставляет ряд дополнительных возможностей для просмотра файла, уточнения его содержимого и копирования в какой-либо другой каталог, отличный от участвующих в сравнении."
+			"Контекстное меню предоставляет ряд дополнительных возможностей для просмотра файла, уточнения его содержимого, переименования и копирования в какой-либо другой каталог, отличный от участвующих в сравнении."
+			."\n\n'Проставить флажки ..'\t - открывает диалог, позволяющий проставить указанные флажки для всех файлов в директории (любого уровня)"
+			."\n\n'Скрыть записи ..'\t - открывает диалог позволяющий скрыть некоторые записи на основании пути, удалив их из списка; при повторном поиске эти записи также не будут отображаться. Список скрытых записей можно очистить кнопкой 'Очистить список скрытых'"
 		       },
 		      ]);
-
-  $lang = get_lang();
 }

@@ -14,19 +14,18 @@ use Gtk2 '-init';
 use File::Find;
 use File::Copy;
 use File::Spec;
+use Text::Glob 'glob_to_regex';
 use MIME::Base64 qw(decode_base64);
 use URI::Escape;
 
 use strict;
-#no warnings "experimental::smartmatch";
 
 my $file_manager="thunar";
 my $editor="leafpad";
 my $open_helper = 'exo-open';
 my $main_title = 'file-search';
 
-my %default = (name                => '',
-               name_use_regexp     => 1,
+my %default = (name_mode           => 'simple', # glob, regexp, simple
 	       name_case_sensitive => 0,
                directory => decode ('utf-8', $ENV{PWD}),
                text_case_sensitive => 0);
@@ -60,9 +59,7 @@ my @menu_actions = ({name    => 'Open',
 		     key     => 'Ctrl-n',
 		     handler => \&rename_handler});
 
-our $VERSION = '1.04';
-
-##### global var ######################################################
+our $VERSION = '1.1';
 
 my $icon_data;
 my $lang  = get_lang ();
@@ -87,7 +84,7 @@ my $break_search;
 my (%search_name,  %search_time, %search_size,
     @search_types, %search_text, $search_dir, $search_depth);
 
-#########################################################################
+
 {
   my $icon_pixbuf;
 
@@ -112,38 +109,65 @@ my (%search_name,  %search_time, %search_size,
   $main_window->set_size_request (640, 480);
 
   my $mainbox = Gtk2::VBox->new ();
+  my $hbox;
 
-  my $table = Gtk2::Table->new (5, 4, TRUE);
+  my $table = Gtk2::Table->new (8, 4, FALSE);
   $mainbox->pack_start ($table, FALSE, FALSE, 0);
 
-  my $lb = Gtk2::Label->new (text ('file name'));
-  $lb->set_alignment (0.0, 0.5);
-  $table->attach ($lb, 0, 1, 0, 1, ['fill'],['expand', 'fill'], 5, 0);
+  my $table_x_space = 1;
+  my $table_y_space = 1;
+
+  my $att_shr =
+    sub {my ($widget,$x1,$x2,$y) = @_;
+	 $table->attach ($widget, $x1, $x2, $y, $y+1, ['shrink','fill'],[],
+			 $table_x_space,$table_y_space);};
+
+  my $att_exp =
+    sub {my ($widget,$x1,$x2,$y) = @_;
+	 $table->attach ($widget, $x1, $x2, $y, $y+1, ['expand','fill'],[],
+			 $table_x_space,$table_y_space);};
 
   $name_box = Name_Box->new;
-  $table->attach_defaults ($name_box->box, 1, 5, 0, 1);
 
-  $lb = Gtk2::Label->new (text ('directory'));
-  $lb->set_alignment(0.0, 0.5);
-  $table->attach ($lb, 0, 1, 1, 2, ['fill'],['expand', 'fill'], 5, 0);
+  &$att_shr ($name_box->{label}, 0, 1, 0);
+  &$att_exp ($name_box->{entry}, 1, 2, 0);
+  &$att_shr ($name_box->{mode}, 2, 3, 0);
+  &$att_shr ($name_box->{case}, 3, 4, 0);
 
   $dir_box = Dir_Box->new;
-  $table->attach_defaults ($dir_box->box, 1, 5, 1, 2);
 
-  
-  $lb = Gtk2::Label->new (text ('modify time'));
-  $lb->set_alignment (0.0, 0.5);
-  $table->attach ($lb, 0, 1, 2, 3, ['fill'],['expand','fill'], 5, 0);
+  &$att_shr($dir_box->{label}, 0, 1, 1);
+  &$att_exp ($dir_box->{entry}, 1, 2, 1);
+  &$att_shr ($dir_box->{button}, 2, 3, 1);
+  &$att_shr ($dir_box->{depth_lb}, 3, 4, 1);
+  &$att_shr ($dir_box->{depth_sp}, 4, 5, 1);
 
   $time_box = Time_Box->new;
-  $table->attach_defaults ($time_box->box, 1, 3, 2, 3);
+
+  $hbox = Gtk2::HBox->new (FALSE);
+  &$att_shr ($time_box->{'label'}, 0, 1, 2);
+  $hbox->pack_start ($time_box->{less_more}, FALSE, FALSE, 0);
+  $hbox->pack_start ($time_box->{entry}, FALSE, FALSE, 0);
+  $hbox->pack_start ($time_box->{unit}, FALSE, FALSE, 0);
+  &$att_shr ($hbox, 1, 2, 2);
 
   $size_box = Size_Box->new;
-  $table->attach_defaults ($size_box->box, 3, 5, 2, 3);
 
-  $lb = Gtk2::Label->new (text ('file types'));
-  $lb->set_alignment(0.0, 0.5);
-  $table->attach ($lb, 0, 1, 3, 4, ['fill'],['expand', 'fill'], 5, 0);
+  $hbox = Gtk2::HBox->new (FALSE);
+  my  $sep = Gtk2::VSeparator->new;
+  $hbox->pack_start ($sep, FALSE, FALSE,0);
+  $hbox->pack_start ($size_box->{label}, FALSE, FALSE, 0);
+  $hbox->pack_start ($size_box->{'label>'}, FALSE, FALSE, 0);
+  &$att_shr ($hbox, 2, 3, 2);
+
+  $hbox = Gtk2::HBox->new (FALSE);
+  $hbox->pack_start ($size_box->{min}, TRUE, TRUE, 0);
+  $hbox->pack_start ($size_box->{'label<'}, FALSE, FALSE, 0);
+  $hbox->pack_start ($size_box->{max}, TRUE, TRUE, 0);
+  &$att_shr ($hbox, 3, 4, 2);
+
+  $hbox = Gtk2::HBox->new (FALSE);
+  $table->attach ($size_box->{unit}, 4, 5, 2, 3, ['fill', 'shrink'],[], 0, 0);
 
   $type_box = Type_Box->new ('f','file',
 			     'd','dir',
@@ -152,23 +176,20 @@ my (%search_name,  %search_time, %search_size,
 			     'p','pipe',
 			     'c','char',
 			     'b','block');
-
-  $table->attach_defaults ($type_box->box, 1, 5, 3, 4);
-
-
-  $lb = Gtk2::Label->new(text ('text (regexp)'));
-  $lb->set_alignment(0.0, 0.5);
-  $table->attach ($lb, 0, 1, 4, 5, ['fill'],['expand', 'fill'], 5, 0);
+  &$att_shr ($type_box->{label}, 0, 1, 3);
+  &$att_exp ($type_box->{checks_box}, 1, 5, 3);
 
   $grep_box = Grep_Box->new;
 
-  $table->attach_defaults ($grep_box->box, 1, 5, 4, 5);
+  &$att_shr ($grep_box->{label}, 0, 1, 4);
+  &$att_exp ($grep_box->{entry}, 1, 2, 4);
+  &$att_shr ($grep_box->{case}, 2, 4, 4);
 
   Menu::create (\@menu_actions);
 
   $result_list = File_List->new ();
-  $result_list->key_press_handler (\&list_press_key);
-  $result_list->click_handler (\&list_click_handler);
+  $result_list->set_key_press_handler (\&list_press_key);
+  $result_list->set_click_handler (\&list_click_handler);
 
   #EventBox нужен для корректного позиционировани контекстного меню
   my $eventbox = Gtk2::EventBox->new();
@@ -181,16 +202,16 @@ my (%search_name,  %search_time, %search_size,
 				  &&(Menu::show());
 			    });
 
-  $eventbox->add ($result_list->box());
+  $eventbox->add ($result_list->{box});
 
   $mainbox->pack_start ($eventbox, TRUE, TRUE, 0);
 
   $exec_box = Exec_Box->new;
-  $exec_box -> set_handler (\&exec_handler);
-  $mainbox->pack_start ($exec_box->box, FALSE, FALSE, 0);
+  $exec_box -> set_click_handler (\&exec_handler);
+  $mainbox->pack_start ($exec_box->{box}, FALSE, FALSE, 0);
 
   # кнопки управления
-  my $hbox = Gtk2::HBox->new(TRUE);
+  $hbox = Gtk2::HBox->new(TRUE);
   $start_button = Gtk2::Button->new (text ("Start"));
   $start_button->signal_connect (clicked => \&start_search, $main_window);
   $hbox->pack_start ($start_button, TRUE, TRUE, 0);
@@ -214,12 +235,8 @@ my (%search_name,  %search_time, %search_size,
   $mainbox->pack_start($hbox, FALSE, FALSE, 0);
 
   $main_window->signal_connect ('key-press-event' => \&window_press_key);
-
   $main_window->add ($mainbox);
-
-
   $main_window->show_all;
-
   $main_window->set_icon ($icon_pixbuf);
 }
 
@@ -228,7 +245,6 @@ init_controls ();
 Gtk2->main;
 
 0;
-#############################################################################
 
 ## localization #############################################################
 sub get_lang {
@@ -247,7 +263,8 @@ sub text {
   my $key = shift;
   $lang eq 'en' and return $key;
   #print "lang:$lang, key:$key->", $local_text {$key}->{$lang}, "\n";
-  exists $local_text {$key}->{$lang} ? return $local_text {$key}->{$lang} : return $key;
+  exists $local_text {$key}->{$lang} ? return $local_text {$key}->{$lang}
+    : return $key;
 }
 
 sub show_help {
@@ -283,11 +300,16 @@ sub show_help {
   $dialog->destroy;
 }
 
-#######################################################################################
+################################################################################
+sub on_exit {
+  $break_search = 1;
+  Gtk2->main_quit;
+}
+
 sub init_controls {
   $dir_box->set ($default{directory});
   $name_box->grab_focus;
-  $name_box->set ($default{name}, $default{name_use_regexp}, $default{name_case_sensitive});
+  $name_box->init ($default{name_mode}, $default{name_case_sensitive});
   $name_box->set_pos (1);
   $size_box->init;
   $time_box->init;
@@ -342,8 +364,7 @@ sub file_dialog_run {
   return $res;
 }
 
-##############################################################################
-# обработчики menu
+### menu  handlers #############################################################
 sub edit_handler {
   my $pid;
   if (not $pid = fork) {
@@ -384,7 +405,7 @@ sub delete_handler {
     my $err;
     File::Path::remove_tree (@names , {error => \$err});
 
-    if (@$err) { #ошибка
+    if (@$err) {
       my $m;
       for my $diag (@$err) {
     	my ($file, $message) = %$diag;
@@ -593,7 +614,8 @@ sub exec_handler {
     }
   }
 }
-###########################################################################
+
+### search proceduries #########################################################
 my $found_counter = 0;
 
 sub test_depth {
@@ -615,7 +637,8 @@ sub test_file {
 
   my $res;
 
-  if ($search_name{regexp}) {$res = $name =~ $search_name{name}}
+  if ($search_name{name} eq '') {$res = 1}
+  elsif ($search_name{mode} eq 'regexp') {$res = $name =~ $search_name{name}}
   elsif ($search_name{case}) { $res = (index ($name, $search_name{name}) > -1)}
   else { $res = (index (lc ($name), $search_name{name}) > -1)}
 
@@ -653,7 +676,8 @@ sub test_file {
   my $owner = owner_format($par[4], $par[5]);
 
   if ($search_time{time}) {
-    $res &&= ($search_time{before} ? $time < $search_time{time} : $time > $search_time{time})
+    $res &&= ($search_time{before} ? $time < $search_time{time}
+	      : $time > $search_time{time})
   }
 
   $res &&= (! defined $search_size{min} or $size >= $search_size{min});
@@ -668,13 +692,15 @@ sub test_file {
   if ($res and $search_text{re}) {
     $text_res = 0;
 
+    local *FILE;
+
     if (open FILE, $name) {
       #print "text search in:$name\n";
       my $err;
-      local $SIG{__WARN__} = sub {warn "Error regexp search in:'",
-				    encode ('utf8', $path), "'\n"; $err = 1;};
-      local $SIG{__DIE__} = sub {warn "ERROR regexp search in:'",
-				   encode ('utf8', $path), "'\n"; $err = 1;};
+      local $SIG{__WARN__} = sub {warn "Error 1 regexp search in:'",
+				    encode ('utf8', $path), "'(binary?)\n"; $err = 1;};
+      local $SIG{__DIE__} = sub {warn "Error 2 regexp search in:'",
+				   encode ('utf8', $path), "'(binary?)\n"; $err = 1;};
       while (<FILE>) {
         $text_res = eval {($_ =~ $search_text{re})};
         last if $text_res or $err;
@@ -698,27 +724,31 @@ sub test_file {
     { Glib::MainContext->default->iteration(FALSE) };
 }
 
-
 sub start_search {
-  $name_box->text_to_list;
-  $dir_box->text_to_list;
-  $grep_box->text_to_list;
+  $name_box->{entry}->text_to_list;
+  $dir_box->{entry}->text_to_list;
+  $grep_box->{entry}->text_to_list;
   $result_list->clear;
   $main_window->set_title ($main_title . ": started");
 
   %search_name = $name_box->get;
 
-  if ($search_name{regexp}) {
-    if ($search_name{case}) {
-      $search_name{name} = eval {qr/$search_name{name}/} || print STDERR "regexp error";
-    }
-    else     {
-      $search_name{name} = eval {qr/$search_name{name}/i} || print STDERR "regexp error";
-    }
-  }
-  else {
-    if (! $search_name{case}) {
-      $search_name{name} = lc $search_name{name};
+  if ($search_name{name} ne '') {
+    if ($search_name{mode} eq 'regexp') {
+      if ($search_name{case}) {
+	$search_name{name} = eval {qr/$search_name{name}/} || print STDERR "regexp error";
+      } else {
+	$search_name{name} = eval {qr/$search_name{name}/i} || print STDERR "regexp error";
+      }
+    } elsif ($search_name{mode} eq 'glob') {
+      $search_name{name} = '*' if $search_name{name} eq '';
+      $search_name{name} = glob_to_regex ($search_name{name});
+      $search_name{mode} = 'regexp';
+      #print "glob:$search_name{name}\n";
+    } else {# search_name{mode} = 'simple'
+      if (! $search_name{case}) {
+	$search_name{name} = lc $search_name{name};
+      }
     }
   }
 
@@ -780,7 +810,7 @@ sub start_search {
     carp "error search: $@" if $@ !~ /break search/;
   }
 
-   $main_window->set_title ($main_title .':'. $result_list->row_count()
+  $main_window->set_title ($main_title .':'. $result_list->row_count()
    			   . ($break_search ? ' (aborted)' : ''));
 
   chdir $start_pwd; #when error occured need set pwd
@@ -793,95 +823,9 @@ sub stop_search {
   $break_search = 1;
   $stop_button->set_sensitive (0);
   $start_button->set_sensitive (1);
-
 }
 
-sub on_exit {
-  $break_search = 1;
-  Gtk2->main_quit;
-}
-
-sub name_str {
-  my $namestr = "";
-  for my $nm (@_) {
-    $nm =~ s/"/\\\"/g;
-    $namestr .= " \"$nm\"";
-  }
-  return $namestr;
-}
-
-sub del_sp {
-  my $s = shift;
-  $s =~ s/^\s+//;
-  $s =~ s/\s+$//;
-  return $s;
-}
-
-# функции форматирования данных для вывода
-sub time_format {
-  my $tm = shift;
-  my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst)
-    = localtime($tm);
-
-  return sprintf "%4d-%02d-%02d %02d:%02d:%02d",
-                 $year+1900,$mon+1,$mday,$hour,$min,$sec;
-}
-
-sub num_format {
-  my $x = shift;
-  my @a;
-  my $i = 3;
-  while ($i < length($x)) {
-    push @a, substr($x, -$i, 3);
-    $i += 3;
-  }
-  push @a, substr($x, 0, 3 + length($x) - $i);
-
-  return join '_', reverse @a;
- #return $x;
-}
-
-sub file_type_format {
-  my $tp = shift;
-  my %type_sym = (8  => 'f',
-                  4  => 'd',
-                  10 => 'l',
-                  12 => 's',
-                  1  => 'p',
-                  2  => 'c',
-                  6  => 'b');
-
-  return $type_sym {$tp};
-}
-
-sub perm_format {
-  my $perm = shift;
-  return sprintf "%04o", $perm;
-}
-
-sub owner_format {
-  my ($uid, $gid) = @_;
-  my $uname = getpwuid($uid);
-  my $gname = getgrgid($gid);
-  return ($uname? $uname : $uid) . ':' . ($gname ? $gname : $gid);
-}
-
-sub rdev_format {
- return sprintf "%03d,%03d,%03d",
-                 ($_[0] >> 16) & 0xff,
-                 ($_[0] >> 8) & 0xff,
-                  $_[0] & 0xff;
-}
-
-sub files_uri {
-  my @res;
-  map {push @res,  'file://' . uri_escape ($_, q( ?<>{}#%`;"))} @_;
-  #print "uri:@res\n";
-  return @res;
-}
-
-######################################################################
-# обработка клавиатуры
+### press key and mouse handlers ###############################################
 sub window_press_key {
   my ($widget, $event, $parameter)= @_;
   my $key_nr = $event->keyval();
@@ -894,7 +838,6 @@ sub window_press_key {
   return FALSE;
 }
 
-# обработка мыши
 sub list_click_handler {
   my ($widget,$event) = @_;
   my $button_nr = $event->button;
@@ -945,8 +888,8 @@ sub get_key_handler {
   }
   return undef;
 }
-#############################################################################
-# Clipboard
+
+### clipboard ##################################################################
 sub clipboard_copy {
   my $names = [$result_list->selected_names];
 
@@ -1019,7 +962,6 @@ sub clear_func {
 }
 
 #### utils ##########################################################
-# удаление пробелов и замена специальных символов (имена директорий)
 sub rm_sp {
   my $str = shift;
   $str =~ s/^\s+//g;
@@ -1032,6 +974,15 @@ sub home {
   my $str = shift;
   if ($str =~ /^~\//) {
     $str =~ s/^~/decode ('utf-8', $ENV{HOME})/e;
+  }
+  return $str;
+}
+
+# замена ./ текущим  каталогом
+sub pwd {
+  my $str = shift;
+  if ($str =~ /^\.\//) {
+    $str =~ s/^\./decode ('utf-8', $ENV{PWD})/e;
   }
   return $str;
 }
@@ -1054,7 +1005,85 @@ sub canon_file_path {
    return File::Spec->rel2abs ($str);
 }
 
-######################################################################
+sub name_str {
+  my $namestr = "";
+  for my $nm (@_) {
+    $nm =~ s/"/\\\"/g;
+    $namestr .= " \"$nm\"";
+  }
+  return $namestr;
+}
+
+sub del_sp {
+  my $s = shift;
+  $s =~ s/^\s+//;
+  $s =~ s/\s+$//;
+  return $s;
+}
+
+sub time_format {
+  my $tm = shift;
+  my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst)
+    = localtime($tm);
+
+  return sprintf "%4d-%02d-%02d %02d:%02d:%02d",
+                 $year+1900,$mon+1,$mday,$hour,$min,$sec;
+}
+
+sub num_format {
+  my $x = shift;
+  my @a;
+  my $i = 3;
+  while ($i < length($x)) {
+    push @a, substr($x, -$i, 3);
+    $i += 3;
+  }
+  push @a, substr($x, 0, 3 + length($x) - $i);
+
+  return join '_', reverse @a;
+ #return $x;
+}
+
+sub file_type_format {
+  my $tp = shift;
+  my %type_sym = (8  => 'f',
+                  4  => 'd',
+                  10 => 'l',
+                  12 => 's',
+                  1  => 'p',
+                  2  => 'c',
+                  6  => 'b');
+
+  return $type_sym {$tp};
+}
+
+sub perm_format {
+  my $perm = shift;
+  return sprintf "%04o", $perm;
+}
+
+sub owner_format {
+  my ($uid, $gid) = @_;
+  my $uname = getpwuid($uid);
+  my $gname = getgrgid($gid);
+  return ($uname? $uname : $uid) . ':' . ($gname ? $gname : $gid);
+}
+
+sub rdev_format {
+ return sprintf "%03d,%03d,%03d",
+                 ($_[0] >> 16) & 0xff,
+                 ($_[0] >> 8) & 0xff,
+                  $_[0] & 0xff;
+}
+
+sub files_uri {
+  my @res;
+  map {push @res,  'file://' . uri_escape ($_, q( ?<>{}#%`;"))} @_;
+  #print "uri:@res\n";
+  return @res;
+}
+
+# components packages ##########################################################
 package EntryX;
 use Glib qw /TRUE FALSE/;
 use utf8;
@@ -1125,8 +1154,11 @@ sub new {
  my $self = {};
  bless ($self, $class);
 
+ $self->{label} = Gtk2::Label->new (::text ('file types'));
+ $self->{label}->set_alignment(0.0, 0.5);
+
  my $hbox = Gtk2::HBox->new();
- $self->{box} = $hbox;
+ $self->{checks_box} = $hbox;
  $self->{checks} = [];
  $self->{types} = [];
  my ($type, $label);
@@ -1149,259 +1181,280 @@ sub get {
   }
   return @res;
 }
-
-sub box {
-  my $self = shift;
-  return $self->{box};
-}
 ##############################################################################
-package File_List;
+{
+  package File_List;
+  use utf8;
+  use Glib qw/TRUE FALSE/;
+  use Gtk2::SimpleList;
 
-use utf8;
-use Glib qw/TRUE FALSE/;
-use Gtk2::SimpleList;
+  my $sort_int_func;
+  my $col_randr_func;
 
-sub new {
- my $class = shift;
- my $self = {};
- bless ($self, $class);
+  sub new {
+    my $class = shift;
+    my $self = {};
+    bless ($self, $class);
 
- my @desc = (' ', 'text',
-            ::text ('file name'),'text',
-            ::text ('directory'), 'text',
-            ::text ('size'), 'text',
-            ::text ('time'),'text',
-            ::text ('perm'),'text',
-            ::text ('owner'),'text',
-            ' ','text');
+    my @desc = (' ', 'text',
+		::text ('file name'),'text',
+		::text ('directory'), 'text',
+		::text ('size'), 'text',
+		::text ('time'),'text',
+		::text ('perm'),'text',
+		::text ('owner'),'text',
+		' ','text');
 
- my @align = (0, 0, 0, 1, 0, 0 ,0, 0);
+    my @align = (0, 0, 0, 1, 0, 0 ,0, 0);
 
- my $list = Gtk2::SimpleList -> new (@desc);
+    my $list = Gtk2::SimpleList -> new (@desc);
 
- for (my $i = 0; $i < $#desc/2; $i++) {
-   my $clm = $list -> get_column ($i);
-   ($clm -> get_cell_renderers())[0] ->set('xalign', $align[$i]);
-    $clm->set_clickable(TRUE);
-    $clm->set_resizable(TRUE);
-    $clm->set_sort_column_id($i);
- }
- $list->get_selection->set_mode ('multiple');
- $list->get_model->set_sort_func(3, \&File_List::sort_int, 3);# sort size
+    for (my $i = 0; $i < $#desc/2; $i++) {
+      my $clm = $list -> get_column ($i);
+      my $r = $clm->get_cell_renderers;
+      # ($clm -> get_cell_renderers())[0] ->set('xalign', $align[$i]);
+      $r->set('xalign', $align[$i]);
+      $clm->set_clickable(TRUE);
+      $clm->set_resizable(TRUE);
+      $clm->set_sort_column_id($i);
+      $clm->set_cell_data_func ($r, $col_randr_func, $self);
+    }
+    $list->get_selection->set_mode ('multiple');
+    $list->get_model->set_sort_func(3, $sort_int_func, 3);
+    # sort size sort func
 
- my $scroll = Gtk2::ScrolledWindow->new;
- $scroll -> set_policy ('automatic', 'automatic');
- $scroll -> add ($list);
- $self->{list} = $list;
- $self->{box} = $scroll;
- return  $self;
-}
-
-sub click_handler {
-  my ($self, $handler) = @_;
-  $self->{list}->signal_connect('button-press-event' => $handler);
-}
-
-sub key_press_handler {
-  my ($self, $handler) = @_;
-  $self->{list}->signal_connect('key-press-event' => $handler);
-}
-
-sub clear {
-  my $self = shift;
-  $self->{list}->get_model->clear;
-}
-
-# добавление результата в список найденного
-sub add {
-  my ($self, $name, $dir, $type, $size, $time, $perm, $owner, $info) = @_;
-
-  push @{$self->{list}->{data}}, [
-                                 $type,
-                                 $name,
-                                 $dir,
-                                 $size,
-                                 $time,
-                                 $perm,
-                                 $owner,
-                                 $info
-                                ];
-}
-
-sub selected_inx {
-  my $self = shift;
-  my @sel = $self->{list}->get_selected_indices;
-  return @sel;
-}
-
-sub selected_names {
-  my $self = shift;
-  my @sel = $self->selected_inx();
-  my @names;
-  for my $inx (@sel) {
-    push (@names, @{$self->{list}->{data}}[$inx]->[2]
-	             . '/' . @{$self->{list}->{data}}[$inx]->[1]);
+    my $scroll = Gtk2::ScrolledWindow->new;
+    $scroll -> set_policy ('automatic', 'automatic');
+    $scroll -> add ($list);
+    $self->{list} = $list;
+    $self->{box} = $scroll;
+    $self->set_row_colors (0xffffff, 0xe0e0e0);
+    return  $self;
   }
-  return @names;
-}
 
-sub selected_list {
-  my $self = shift;
-  my @sel = $self->selected_inx();
-  my @names;
-  for my $inx (@sel) {
-    push (@names, {dir  => @{$self->{list}->{data}}[$inx]->[2],
-                   file => @{$self->{list}->{data}}[$inx]->[1],
-                   inx  => $inx});
+  sub set_click_handler {
+    my ($self, $handler) = @_;
+    $self->{list}->signal_connect('button-press-event' => $handler);
   }
-  return @names;
-}
 
-sub delete_items {
-  my ($self, @inxes) = @_;
-  #удаляем с конца - чтобы не портить меньшие индексы
-  @inxes = reverse sort @inxes;
-  for my $i (@inxes) {
-    splice @{$self->{list}->{data}}, $i, 1;
+  sub set_key_press_handler {
+    my ($self, $handler) = @_;
+    $self->{list}->signal_connect('key-press-event' => $handler);
   }
-}
 
-sub delete_names {
-  my ($self, @names) = @_;
-  my @nx;
+  sub clear {
+    my $self = shift;
+    $self->{list}->get_model->clear;
+  }
 
-  for my $name (@names) {
-    my $model = $self->{list}->get_model;
-    my $iter = $model->get_iter_first;
+  # добавление результата в список найденного
+  sub add {
+    my ($self, $name, $dir, $type, $size, $time, $perm, $owner, $info) = @_;
 
-    while (defined $iter) {
-      my $l_name = $model->get_value ($iter, 1);
-      my $l_dir =  $model->get_value ($iter, 2);
+    push @{$self->{list}->{data}}, [
+				    $type,
+				    $name,
+				    $dir,
+				    $size,
+				    $time,
+				    $perm,
+				    $owner,
+				    $info
+				   ];
+  }
 
-      if ("$l_dir/$l_name" eq $name
-	  or index ($l_dir, $name) == 0) { # $name - directory
-        my $next = $model->iter_next ($iter);
+  sub selected_inx {
+    my $self = shift;
+    my @sel = $self->{list}->get_selected_indices;
+    return @sel;
+  }
 
-	$model->remove ($iter);
-        $iter = $next;
-      }
-      else {$iter = $model->iter_next ($iter)}
+  sub selected_names {
+    my $self = shift;
+    my @sel = $self->selected_inx();
+    my @names;
+    for my $inx (@sel) {
+      push (@names, @{$self->{list}->{data}}[$inx]->[2]
+	    . '/' . @{$self->{list}->{data}}[$inx]->[1]);
+    }
+    return @names;
+  }
+
+  sub selected_list {
+    my $self = shift;
+    my @sel = $self->selected_inx();
+    my @names;
+    for my $inx (@sel) {
+      push (@names, {dir  => @{$self->{list}->{data}}[$inx]->[2],
+		     file => @{$self->{list}->{data}}[$inx]->[1],
+		     inx  => $inx});
+    }
+    return @names;
+  }
+
+  sub delete_items {
+    my ($self, @inxes) = @_;
+    #удаляем с конца - чтобы не портить меньшие индексы
+    @inxes = reverse sort @inxes;
+    for my $i (@inxes) {
+      splice @{$self->{list}->{data}}, $i, 1;
     }
   }
-}
 
-sub rename_file {
-  my ($self, $inx, $name) = @_;
-  @{$self->{list}->{data}}[$inx]->[1] = $name;
-}
+  sub delete_names {
+    my ($self, @names) = @_;
+    my @nx;
 
-sub grab_focus {
-  my $self = shift;
-  $self->{list}->grab_focus;
-}
+    for my $name (@names) {
+      my $model = $self->{list}->get_model;
+      my $iter = $model->get_iter_first;
 
-sub box {
-  my $self = shift;
-  return $self->{box};
-}
+      while (defined $iter) {
+	my $l_name = $model->get_value ($iter, 1);
+	my $l_dir =  $model->get_value ($iter, 2);
 
+	if ("$l_dir/$l_name" eq $name
+	    or index ($l_dir, $name) == 0) { # $name - directory
+	  my $next = $model->iter_next ($iter);
 
-sub sort_int
-{
-  my $col_num = pop;
-  my ($list, @iter) = @_;
-  @iter = map {$_ = $list->get($_, $col_num); $_=~s/_//g; $_} @iter;
-  return ($iter[0] <=> $iter[1]);
-}
+	  $model->remove ($iter);
+	  $iter = $next;
+	} else {
+	  $iter = $model->iter_next ($iter);
+	}
+      }
+    }
+  }
 
-sub row_count {
-  my $self = shift;
-  return $#{$self->{list}->{data}}+1;
+  sub rename_file {
+    my ($self, $inx, $name) = @_;
+    @{$self->{list}->{data}}[$inx]->[1] = $name;
+  }
+
+  sub grab_focus {
+    my $self = shift;
+    $self->{list}->grab_focus;
+  }
+
+  sub row_count {
+    my $self = shift;
+    return $#{$self->{list}->{data}}+1;
+  }
+
+  sub set_row_colors {
+    my $self = shift;
+    my ($rgb_1, $rgb_2) = @_;
+    $self->{row_color} = [];
+
+    for my $rgb ($rgb_1, $rgb_2) {
+      my @gdk_cl;
+      for (my $i = 2; $i >= 0; $i--) {
+	my $c = $rgb >> 8*$i & 0xFF;
+	push @gdk_cl, $c << 8 | 0xFF;
+      }
+      #printf ("color:%04x,%04x,%04x\n", @gdk_cl);
+      my $key = 'row_color_' . ($rgb == $rgb_1 ? '1' : '2');
+      push @{$self->{row_color}},Gtk2::Gdk::Color->new (@gdk_cl);
+    }
+  }
+
+  BEGIN {
+    # for sort size column (number with '_')
+    $sort_int_func =
+      sub {
+	my $col_num = pop;
+	my ($list, @iter) = @_;
+	@iter = map {$_ = $list->get($_, $col_num); $_=~s/_//g; $_} @iter;
+	return ($iter[0] <=> $iter[1]);
+      };
+    # It is call on any cell rendering
+    $col_randr_func =
+      sub {
+	my ($column, $renderer, $model, $iter, $self) = @_;
+	my $path = $model->get_string_from_iter ($iter);
+	my $color_inx = $path % 2;
+	$renderer->set('cell-background-gdk', $self->{row_color}->[$color_inx]);
+      };
+  }
 }
-##############################################################################
+# END File_List ################################################################
+
 package Name_Box;
 use utf8;
 use Glib qw/TRUE FALSE/;
 
-our @ISA;
-BEGIN {
-  @ISA = ('EntryX');
-  EntryX->import;
-}
-
 sub new {
   my $class = shift;
-  my $hbox = Gtk2::HBox->new;
-  my $self = EntryX->new;
+  my $self = {};
+  $self->{entry} = EntryX->new;
+  $self->{label} = Gtk2::Label->new (::text ('file name'));
+  $self->{label}->set_alignment (0.0, 0.5);
+  $self->{case} = Gtk2::CheckButton->new (::text ("case-sensitive"));
+  $self->{case}->set_active (FALSE);
 
-  $hbox->pack_start ($self, TRUE, TRUE, 0);
-
-  my $regexp_cb = Gtk2::CheckButton->new (::text ("regexp"));
-  $regexp_cb->set_active (TRUE);
-  $hbox->pack_start ($regexp_cb, FALSE, FALSE, 0);
-
-  my $case_cb = Gtk2::CheckButton->new (::text ("case-sensitive"));
-  $case_cb->set_active (FALSE);
-  $hbox->pack_start ($case_cb, FALSE, FALSE, 0);
-
-  $self->{case} = $case_cb;
-  $self->{regexp} = $regexp_cb;
-  $self->{box} = $hbox;
+  my $mode = Gtk2::ComboBox->new_text;
+  $mode->append_text ('glob');
+  $mode->append_text ('regexp');
+  $mode->append_text ('simple');
+  $mode->set_size_request (68, -1);
+  $mode->signal_connect ('changed' =>
+			 sub {$self->{case}->sensitive($mode->get_active != 0);
+			      $self->{case}->set_active(1)
+				if $mode->get_active == 0});
+  $self->{mode} = $mode;
   bless ($self, $class);
   return  $self;
 }
 
 sub get {
   my $self = shift;
-  return (name   => $self->child->get_text,
-	  regexp => $self->{regexp}->get_active,
+  my $a = $self->{mode}->get_active;
+  my $mode = ($a == 0?'glob':($a == 1?'regexp':'simple'));
+  return (name   => $self->{entry}->child->get_text,
+	  mode   => $mode,
 	  case   => $self->{case}->get_active);
 }
 
-sub set {
-  my ($self, $str, $regexp, $case) = @_;
-  $self->child->set_text ($str);
-  $self->child->set_position (length $str);
-  $self->{regexp}->set_active ($regexp);
+sub init {
+  my ($self, $mode, $case) = @_;
+
+  $self->{entry}->child->set_text ('*') if ($mode eq 'glob');
+  if ($mode eq 'glob') {
+    $self->{case}->sensitive (0);
+    $self->{case}->set_active (0);
+  } else {
+    $self->{case}->sensitive (1);
+    $self->{case}->set_active ($case);
+  }
+
   $self->{case}->set_active ($case);
+  $self->{mode}->set_active (0) if $mode eq 'glob';
+  $self->{mode}->set_active (1) if $mode eq 'regexp';
+  $self->{mode}->set_active (2) if $mode eq 'simple';
 }
 
 sub set_pos {
   my ($self, $pos) = @_;
-  $self->child->set_position ($pos);
+  $self->{entry}->child->set_position ($pos);
 }
 
-sub box {
+sub grab_focus {
   my $self = shift;
-  return $self ->{box};
+  $self->{entry}->grab_focus;
 }
+# END Name_Box #################################################################
 
-
-##############################################################################
 package Grep_Box;
-
 use utf8;
 use Glib qw/TRUE FALSE/;
-
-our @ISA;
-BEGIN {
-  @ISA = ('EntryX');
-  EntryX->import;
-}
 
 sub new {
   my $class = shift;
   my $self = {};
-
-  my $hbox = Gtk2::HBox->new;
-  $self = EntryX->new;
-  $hbox -> pack_start ($self, TRUE, TRUE, 0);
-
-  my $case = Gtk2::CheckButton->new (::text ("case-sensitive"));
-  $hbox -> pack_start ($case, FALSE, FALSE, 0);
-
-  $self->{case} = $case;
-  $self->{box} = $hbox;
+  $self->{label} = Gtk2::Label->new(::text ('text (regexp)'));
+  $self->{label}->set_alignment(0.0, 0.5);
+  $self->{entry} = EntryX->new;
+  $self->{case} = Gtk2::CheckButton->new (::text ("case-sensitive"));
   bless ($self, $class);
   return  $self;
 }
@@ -1409,26 +1462,20 @@ sub new {
 sub init {
   my $self = shift;
   my $case = shift;
-  $self->child->set_text ('');
+  $self->{entry}->child->set_text ('');
   $self->{case}->set_active ($case);
 }
 
 sub get {
   my $self = shift;
-  my $str = $self->child->get_text;
-  my $cmd;
+  my $str = $self->{entry}->child->get_text;
   if ($str) {
-    return (re=> $self->child->get_text,  case=> $self->{case}->get_active);
+    return (re=> $str,  case=> $self->{case}->get_active);
   }
   return (re=>undef, case=>undef);
 }
+# END Grep_Box #################################################################
 
-sub box {
-  my $self = shift;
-  return $self ->{box};
-}
-
-#############################################################
 package Exec_Box;
 
 use utf8;
@@ -1459,7 +1506,7 @@ sub new {
   return  $self;
 }
 
-sub set_handler {
+sub set_click_handler {
   my ($self, $handler) = @_;
   $self->{button}->signal_connect (clicked => $handler);
 }
@@ -1469,17 +1516,12 @@ sub init {
   $self->child->set_text ('');
 }
 
-sub box {
-  my $self = shift;
-  return $self ->{box};
-}
-
 sub cmd {
   my $self = shift;
   return  $self->child->get_text;
 }
+#END Exec_Box ##################################################################
 
-############################################################################
 package Time_Box;
 
 use utf8;
@@ -1489,32 +1531,21 @@ sub new {
   my $class = shift;
   my $self = {};
   bless ($self, $class);
+  $self->{label} = Gtk2::Label->new (::text ('modify time'));
+  $self->{label}->set_alignment (0.0, 0.5);
+  $self->{less_more} = Gtk2::ComboBox->new_text;
+  $self->{less_more}->append_text ('<');
+  $self->{less_more}->append_text ('>');
+  $self->{less_more}->set_size_request (48, -1);
 
-  my $hbox = Gtk2::HBox->new;
-  my $less_more = Gtk2::ComboBox->new_text;
-  $less_more->append_text ('<');
-  $less_more->append_text ('>');
-  $less_more->set_size_request (48, -1);
-  $hbox->pack_start ($less_more, FALSE, FALSE, 0);
+  $self->{entry} = Gtk2::Entry->new;
+  $self->{entry}->set_size_request (48);
 
-
-  my $entry = Gtk2::Entry->new;
-  $hbox -> pack_start ($entry, FALSE, FALSE, 0);
-
-  $entry->set_size_request (48);
-
-  my $unit = Gtk2::ComboBox->new_text;
-  $unit->append_text ('day');
-  $unit->append_text ('hour');
-  $unit->append_text ('min');
-  $unit->set_size_request (64, -1);
-  $hbox->pack_start ($unit, FALSE, FALSE, 0);
-
-
-  $self->{entry} = $entry;
-  $self->{less_more} = $less_more;
-  $self->{unit} = $unit;
-  $self->{box} = $hbox;
+  $self->{unit} = Gtk2::ComboBox->new_text;
+  $self->{unit}->append_text ('day');
+  $self->{unit}->append_text ('hour');
+  $self->{unit}->append_text ('min');
+  $self->{unit}->set_size_request (64, -1);
   return $self;
 }
 
@@ -1536,12 +1567,8 @@ sub init {
   $self->{unit}->set_active (FALSE);
   $self->{less_more}->set_active (FALSE);
 }
+# END Time_Box #################################################################
 
-sub box {
-  my $self = shift;
-  return $self->{box};
-}
-##############################################################################
 package Size_Box;
 
 use utf8;
@@ -1552,37 +1579,19 @@ sub new {
   my $self = {};
   bless ($self, $class);
 
-  my $hbox = Gtk2::HBox->new;
-  my  $sep = Gtk2::VSeparator->new;
-  $hbox->pack_start ($sep, FALSE, TRUE, 0);
-
-
-  my $label = Gtk2::Label->new (::text ('size') . ' >');
-  $hbox -> pack_start ($label, FALSE, FALSE, 0);
-
-  my $min = Gtk2::Entry->new;
-  $hbox -> pack_start ($min, FALSE, FALSE, 0);
-  $min->set_size_request (48,-1);
-
-  $label = Gtk2::Label->new (" <");
-  $hbox -> pack_start ($label, FALSE, FALSE, 0);
-
-  my $max = Gtk2::Entry->new;
-  $hbox -> pack_start ($max, FALSE, FALSE, 0);
-  $max->set_size_request (48,-1);
-
-  my $unit = Gtk2::ComboBox->new_text;
-  $unit->append_text ('b');
-  $unit->append_text ('kb');
-  $unit->append_text ('Mb');
-  $unit->set_active (1);
-  $unit->set_size_request (48, -1);
-  $hbox->pack_start ($unit, FALSE, FALSE, 0);
-
-  $self->{max} = $max;
-  $self->{min} = $min;
-  $self->{unit} = $unit;
-  $self->{box} = $hbox;
+  $self->{'label'} = Gtk2::Label->new (::text ('size'));
+  $self->{'label>'} = Gtk2::Label->new ('>');
+  $self->{min} = Gtk2::Entry->new;
+  $self->{min}->set_size_request (48,-1);
+  $self->{'label<'} = Gtk2::Label->new ("<");
+  $self->{max} = Gtk2::Entry->new;
+  $self->{max}->set_size_request (48,-1);
+  $self->{unit} = Gtk2::ComboBox->new_text;
+  $self->{unit}->append_text ('b');
+  $self->{unit}->append_text ('kb');
+  $self->{unit}->append_text ('Mb');
+  $self->{unit}->set_active (1);
+  $self->{unit}->set_size_request (48, -1);
   return $self;
 }
 
@@ -1619,13 +1628,8 @@ sub unit {
   return 1024 if $str eq 'kb';
   return 1024*1024 if $str eq 'Mb';
 }
+# END Size_Box #################################################################
 
-sub box {
-  my $self = shift;
-  return $self->{box};
-}
-
-######################################################################
 {
   package Menu;
   use utf8;
@@ -1669,85 +1673,78 @@ sub box {
 
   sub hide {}
 }
-
 # END Menu ###########################################################
-package Dir_Box;
+{
+  package Dir_Box;
 
-use utf8;
-use Glib qw/TRUE FALSE/;
+  use utf8;
+  use Glib qw/TRUE FALSE/;
 
-our @ISA;
-BEGIN {
-  @ISA = ('EntryX');
-  EntryX->import;
+  my $file_choose_func;
+
+  sub new {
+    my $class = shift;
+    my $self = {};
+    bless ($self, $class);
+    $self->{entry} = EntryX->new;
+    $self->{label} = Gtk2::Label->new (::text ('directory'));
+    $self->{label}->set_alignment (0.0, 0.5);
+
+    $self->{button} = Gtk2::Button->new(" ... ");
+    $self->{button}->signal_connect (clicked => $file_choose_func, $self);
+
+    $self->{depth_lb} = Gtk2::Label->new (::text ('search depth') . ':');
+    # $self->{depth_lb}->set_alignment (1.0, 0.5);
+    $self->{depth_sp} = Gtk2::SpinButton->new (Gtk2::Adjustment->new(0,0,100,1,0,0),0,0);
+    $self->{depth_sp}->set_size_request (48);
+    return  $self;
+  }
+
+  sub get {
+    my $self = shift;
+    my $path = ::envar (::pwd (::home (::rm_sp ($self->{entry}->child->get_text))));
+    $path =~ s/\/$//;
+    set ($self, $path);
+    return $path;
+  }
+
+  sub set {
+    my ($self, $str) = @_;
+    $self->{entry}->child->set_text ($str);
+  }
+
+  sub get_depth {
+    my $self = shift;
+    return $self->{depth_sp}->get_value;
+  }
+
+  BEGIN {
+    $file_choose_func =
+      sub  {
+	my ($button, $self) = @_;
+	my $caption = "Directory";
+	my $res;
+
+	my $dialog = Gtk2::FileChooserDialog->new
+	  ('Выбор ' . $caption,
+	   undef,
+	   'select-folder',
+	   'gtk-ok'     => 'ok',
+	   'gtk-cancel' => 'cancel');
+
+	$dialog->set_current_folder ($self->{entry}->child->get_text);
+
+	my $filter = Gtk2::FileFilter->new;
+	$filter->add_mime_type ('inode/directory');
+	$dialog->set_filter ($filter);
+	my $response = $dialog->run;
+	$res = $response eq 'ok' ? $dialog->get_filename : '';
+	$dialog->destroy;
+	$self->{entry}->child->set_text ($res) if $res;
+	return $res;
+      };
+  }
 }
-
-sub new {
-  my $class = shift;
-  my $self = EntryX->new;
-  bless ($self, $class);
-
-  my $hbox = Gtk2::HBox->new;
-  $self->{box} = $hbox;
-  $hbox->pack_start ($self, TRUE, TRUE, 0);
-
-  my $butt = Gtk2::Button->new (" ... ");
-  $hbox->pack_start ($butt, FALSE, FALSE, 0);
-  $butt->signal_connect (clicked => sub {$dir_box->dialog_run ()});
-
-  my $label = Gtk2::Label->new (::text ('depth') . ':');
-  $hbox -> pack_start ($label, FALSE, FALSE, 0);
-  my $entry = Gtk2::Entry->new;
-  $hbox -> pack_start ($entry, FALSE, FALSE, 0);
-  $entry->set_size_request (32);
-  $self->{depth_entry} = $entry;
-
-  return  $self;
-}
-
-sub dialog_run {
-  my $self = shift;
-  my $caption = "Directory";
-  my $res;
-
-  my $dialog = Gtk2::FileChooserDialog->new
-    ('Выбор ' . $caption,
-     undef,
-     'select-folder',
-     'gtk-ok'     => 'ok',
-     'gtk-cancel' => 'cancel');
-
-  $dialog->set_current_folder ($self->child->get_text);
-
-  my $filter = Gtk2::FileFilter->new;
-  $filter->add_mime_type ('inode/directory');
-  $dialog->set_filter ($filter);
-  my $response = $dialog->run;
-  $res = $response eq 'ok' ? $dialog->get_filename : '';
-  $dialog->destroy;
-  $self->child->set_text ($res) if $res;
-  return $res;
-}
-
-sub get {
-  my $self = shift;
-  return $self->child->get_text;
-}
-
-sub set {
-  my ($self, $str) = @_;
-  $self->child->set_text ($str);
-}
-
-sub get_depth {
-  my $self = shift;
-  return $self->{depth_entry}->get_text;
-}
-
-sub box {
-  return shift->{box};
-}
-
 # END Dir_Box ########################################################
 
 package main;
@@ -1823,7 +1820,8 @@ END_ICON
 		  'Delete file error' => {ru => 'Ошибка удаления файла'},
 		  'Rename error' => {ru => 'Ошибка переименования файла'},
 		  'Command' => {ru => 'Команда'},
-		 'Execute' => {ru => 'Выполнить'},
+		  'Execute' => {ru => 'Выполнить'},
+		  'search depth' => {ru => 'глубина поиска'}
 		 );
 
   %help_text = (en => [
@@ -1836,14 +1834,14 @@ END_ICON
 		ru => [
 		       {title =>'Имя файла',
 			text  =>
-"При установке флажка 'рег.выраж' использовать синтаксис регулярных выражений Perl, "
-. "в противном случае, простое совпадение части имени с образцом.
-Флажок 'учёт регистра' в обоих случаях требует совпадения также и с регистром символов шаблона."
+"Пустая строка в имени файла означает совпадение с любым именем (во всех режимах). \nВыпадающий список режима позволяет выбрать режим поиска - glob (шаблон по типу шелл), regexp (синтаксис регулярных выражений Perl) или simple (простое совпадение с текстом)."
+. "\nФлажок 'учёт регистра' требует совпадения также и с регистром символов шаблона."
 		       },
 		       {title =>'Каталог',
 			text  =>
 "В строке ввода каталога можно использовать переменные окружения (напр. \$HOME),"
-. "~/ - синоним \$HOME, и относительнеые пути (напр. ./ - текущий каталог)."
+			. "~/ - синоним \$HOME, и относительные пути (напр. ./ - текущий каталог)."
+. "\nОпция 'глубина' (1  и более) ограничивает глубину поиска. Может использоваться для выбора (и последующего копирования, перемещения, ..) файлов в текущем каталоге."
 		       },
 
 		       {title => 'Время изменения файла',
