@@ -499,6 +499,8 @@ sub paths_to_names {
 sub file_list {
   my $path = shift;
 
+  local *DIR;
+
   if (! opendir DIR, encode ('utf8', $path)) {
     carp "error opendir" . encode ('utf8', $path) ."\n";
     return;

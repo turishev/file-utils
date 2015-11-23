@@ -668,6 +668,8 @@ sub test_file {
   if ($res and $search_text{re}) {
     $text_res = 0;
 
+    local *FILE;
+
     if (open FILE, $name) {
       #print "text search in:$name\n";
       my $err;
