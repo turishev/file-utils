@@ -626,6 +626,7 @@ sub sftp_run {
   $hbox->pack_start ($butt, TRUE, TRUE, 0);
   $butt->signal_connect (clicked =>
 			 sub {
+			   return  if $tree;
 			   if ($self->{sftp}) {
 			     my $tree_box;
 			     ($tree_box, $tree) = sftp_browser_create ($self->{sftp});
