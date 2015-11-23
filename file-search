@@ -673,10 +673,10 @@ sub test_file {
     if (open FILE, $name) {
       #print "text search in:$name\n";
       my $err;
-      local $SIG{__WARN__} = sub {warn "Error regexp search in:'",
-				    encode ('utf8', $path), "'\n"; $err = 1;};
-      local $SIG{__DIE__} = sub {warn "ERROR regexp search in:'",
-				   encode ('utf8', $path), "'\n"; $err = 1;};
+      local $SIG{__WARN__} = sub {warn "Error 1 regexp search in:'",
+				    encode ('utf8', $path), "'(binary?)\n"; $err = 1;};
+      local $SIG{__DIE__} = sub {warn "Error 2 regexp search in:'",
+				   encode ('utf8', $path), "'(binary?)\n"; $err = 1;};
       while (<FILE>) {
         $text_res = eval {($_ =~ $search_text{re})};
         last if $text_res or $err;
@@ -713,9 +713,9 @@ sub start_search {
   if ($search_name{name} ne '') {
     if ($search_name{mode} eq 'regexp') {
       if ($search_name{case}) {
-	$search_name{name} = eval {qr/\Q$search_name{name}\E/} || print STDERR "regexp error";
+	$search_name{name} = eval {qr/$search_name{name}/} || print STDERR "regexp error";
       } else {
-	$search_name{name} = eval {qr/\Q$search_name{name}\E/i} || print STDERR "regexp error";
+	$search_name{name} = eval {qr/$search_name{name}/i} || print STDERR "regexp error";
       }
     } elsif ($search_name{mode} eq 'glob') {
       $search_name{name} = '*' if $search_name{name} eq '';
