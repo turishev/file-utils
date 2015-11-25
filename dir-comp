@@ -405,6 +405,8 @@ sub file_dialog_run {
      'gtk-ok'     => 'ok',
      'gtk-cancel' => 'cancel');
 
+  $dialog->set_current_folder ($self->{entry}->get_text);
+
   my $filter = Gtk2::FileFilter->new;
   $filter->add_mime_type ('inode/directory');
 
