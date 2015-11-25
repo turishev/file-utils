@@ -360,36 +360,12 @@ sub new {
   my $entry = Gtk2::Entry->new;
   $hbox -> pack_end ($entry, TRUE, TRUE, 0);
 
-  my $lb = Gtk2::Label->new ($self->{label});
-  $hbox->pack_start ($lb, FALSE, TRUE, 0);
-
-  my $hb  = Gtk2::HBox->new();
-  if (exists $opt {butt_size}) {
-    $hb->set_size_request ($opt {butt_size});
-  }
-  else {$hb->set_size_request (120)}
-
-  $hbox -> pack_start ($hb, FALSE, FALSE, 0);
-
-  my $butt = Gtk2::Button->new (' DIR');
-  $hb->pack_start ($butt, TRUE, TRUE, 0);
+  my $butt = Gtk2::Button->new ($self->{label});
+  $hbox->pack_start ($butt, FALSE, FALSE, 0);
   $butt->signal_connect (clicked => \&Dir_Box::file_dialog_run, $self);
-
-  if (not exists $opt {sftp_disable} or not $opt {sftp_disable}) {
-    my $butt = Gtk2::Button->new ('SFTP');
-    $hb->pack_start ($butt, TRUE, TRUE, 0);
-    $butt->signal_connect (clicked => \&Dir_Box::sftp_run, $self);
-  }
-
-  $self->{protocol_label} = Gtk2::Label->new ();
-  $hbox->pack_start ($self->{protocol_label}, FALSE, TRUE, 0);
+  $butt->set_size_request (50);
   $self->{entry} = $entry;
   $self->{box}   = $hbox;
-  $self->{sftp}  = undef;
-  $self->{sftp_host} = '';
-  $self->{sftp_port} = '';
-  $self->{sftp_login} = '';
-  $self->{sftp_password} = '';
 
   return  $self;
 }
@@ -414,7 +390,6 @@ sub file_dialog_run {
 
   if ( $dialog->run eq 'ok') {
     $self->{entry}->set_text ($dialog->get_filename);
-    $self->sftp_disconnect();
   }
   $dialog->destroy;
 }
@@ -432,254 +407,6 @@ sub tree_path {
   return '/' . $dir_path;
 }
 
-sub sftp_ls {
-  my ($sftp, $dir) = @_;
-  my $ls = $sftp->ls ($dir ,
-		      wanted => sub {my $n=$_[1];
-				     $n->{filename} !~ /^\.{1,2}$/
-				       and ::file_type_format ($n->{a}->perm) eq 'dir';
-				   });
-  my @dirs = sort map {$_->{filename}} @$ls ;
-  return \@dirs;
-}
-
-sub sftp_expand_dir {
-  my ($view, $iter, $path, $sftp) = @_;
-  #Gtk2::TreeView, Gtk2::TreeIter, Gtk2::TreePath
-  my $model = $view->get_model;
-
-  my $first_child = $model->iter_children ($iter);
-  my $first_val = $model->get_value ($first_child);
-
-  if (! $first_val) {
-    # yet not expanded throw sftp
-
-    my $names = sftp_ls ($sftp, tree_path ($view, $iter));
-
-    # remove fictive ''-child
-    if (@$names) {
-      $model->remove ($first_child);
-    }
-
-    for my $n (@$names) {
-      my $it = $model->append ($iter);
-      $model->set ($it, 0 => $n);
-      # add fictive '' children - need for expand dir work
-      my $iter_child = $model->append ($it);
-      $model->set ($iter_child, 0 => '');
-    }
-  }
-  return FALSE; # need expand
-}
-
-sub sftp_browser_create {
-  my $sftp = shift;
-
-  my $sw = Gtk2::ScrolledWindow->new (undef, undef);
-  $sw->set_shadow_type ('etched-out');
-  $sw->set_policy ('automatic', 'automatic');
-  $sw->set_size_request (300, 300);
-  $sw->set_border_width (5);
-
-  my $model = Gtk2::TreeStore->new (qw/Glib::String/);
-
-  my $names = sftp_ls ($sftp, '/');
-
-  for my $n (@$names) {
-    my $iter = $model->append (undef);
-    $model->set ($iter, 0 => $n);
-    my $iter_child = $model->append ($iter);
-    $model->set ($iter_child, 0 => '');
-  }
-
-  my $tree_view = Gtk2::TreeView->new ($model);
-  $tree_view->signal_connect ('test-expand-row'=>\&sftp_expand_dir, $sftp);
-  $tree_view->set ('show-expanders', TRUE);
-
-  my $tree_column = Gtk2::TreeViewColumn->new();
-
-  $tree_column->set_title ("Click to sort");
-  my $renderer = Gtk2::CellRendererText->new;
-  $tree_column->pack_start ($renderer, FALSE);
-  $tree_column->add_attribute ($renderer, text => 0);
-  $tree_view->append_column ($tree_column);
-  $tree_view->set_expander_column ($tree_column);
-
-  $tree_view->set_search_column (0);
-  $tree_column->set_sort_column_id (0);
-  $tree_view->set_reorderable(TRUE);
-  $sw->add ($tree_view);
-  $sw->show_all ();
-  return ($sw, $tree_view);
-}
-
-sub sftp_connect {
-  my ($host, $port, $login, $pass) = @_;
-  my $sftp;
-
-  $sftp = Net::SFTP::Foreign->new (host     => $host,
-                                   port     => $port,
-				   user     => $login,
-				   password => $pass);
-
-  if ($sftp->error) {
-    ::show_msg ('error', ::text ('SSH connect fail') .":\n" . $sftp->error);
-    return undef;
-  }
-  else {return $sftp}
-}
-
-sub sftp_disconnect {
-  my $self = shift;
-
-  if ($self->{sftp}) {
-    $self->{sftp}->disconnect;
-    $self->{sftp} = undef;
-    $self->{protocol_label}->set_text ('');
-  }
-}
-
-sub sftp_run {
-  my ($widget, $self) = @_;
-  eval {
-    require Net::SFTP::Foreign;
-    require Net::SFTP::Foreign::Attributes;
-  };
-  if ($@) {
-    ::show_msg ('error', $@);
-    return;
-  }
-
-  my $dialog = Gtk2::Dialog->new (::text ("SFTP connect") 
-				  . ($self->{sftp} ? ' - connected':''),
-				  $main_window,
-				  ['modal', 'destroy-with-parent'],
-                                  'gtk-close' => 'close');
-  my $mainbox = Gtk2::VBox->new ();
-  $dialog->vbox->add ($mainbox);
-  my $table = Gtk2::Table->new (4, 3, FALSE);
-  $mainbox->pack_start ($table, FALSE, FALSE, 0);
-
-  my $lb = Gtk2::Label->new (::text ('host'));
-  $lb->set_alignment (1.0, 0.5);
-  $table->attach ($lb, 0, 1, 0, 1, ['fill'],['expand', 'fill'], 5, 0);
-  my $host_entr = Gtk2::Entry->new();
-  $table->attach_defaults ($host_entr, 1, 2, 0, 1);
-
-  $lb = Gtk2::Label->new (::text ('port'));
-  $lb->set_alignment (1.0, 0.5);
-  $table->attach ($lb, 2, 3, 0, 1, ['fill'],['expand', 'fill'], 5, 0);
-  my $port_entr = Gtk2::Entry->new();
-  $table->attach_defaults ($port_entr, 3, 4, 0, 1);
-
-  $lb = Gtk2::Label->new (::text ('login'));
-  $lb->set_alignment (1.0, 0.5);
-  $table->attach ($lb, 0, 1, 1, 2, ['fill'],['expand', 'fill'], 5, 0);
-  my $login_entr = Gtk2::Entry->new();
-  $table->attach_defaults ($login_entr, 1, 2, 1, 2);
-
-  $lb = Gtk2::Label->new (::text ('password'));
-  $lb->set_alignment (1.0, 0.5);
-  $table->attach ($lb, 2, 3, 1, 2, ['fill'],['expand', 'fill'], 5, 0);
-  my $pass_entr = Gtk2::Entry->new();
-  $pass_entr->set ('invisible-char', 0x2a);
-  $pass_entr->set ('visibility', FALSE);
-
-  $table->attach_defaults ($pass_entr, 3, 4, 1, 2);
-
-  my $status_lb =  Gtk2::Label->new ('Disconnected');
-  $mainbox->pack_start ($status_lb, TRUE, TRUE, 0);
-
-  my $status_set = sub {
-    my ($host, $login) = @_;
-    if ($host) {
-      $status_lb->set_markup ("<span weight=\"bold\" foreground=\"red\">"
-			      ." Connected to $host as '$login'"
-			     . "</span>");
-    }
-    else {
-      $status_lb->set_markup ("<span weight=\"bold\" foreground=\"red\">"
-			      . 'Disconnected'
-			     . "</span>");
-    }
-  };
-
-  my $tree;
-
-  my $hbox = Gtk2::HBox->new(TRUE);
-  $mainbox->pack_start ($hbox, FALSE, FALSE, 0);
-
-  my $butt =  Gtk2::Button->new (::text ('Connect'));
-  $hbox->pack_start ($butt, TRUE, TRUE, 0);
-  $butt->signal_connect (clicked =>
-			 sub {
-			   sftp_disconnect($self->{sftp}) if $self->{sftp};
-
-			   $self->{sftp}  = sftp_connect ($host_entr->get_text,
-							  $port_entr->get_text,
-							  $login_entr->get_text,
-							  $pass_entr->get_text);
-
-			   &$status_set ($host_entr->get_text, $login_entr->get_text);
-			 });
-
-
-  $butt =  Gtk2::Button->new (::text ('Select dir'));
-  $hbox->pack_start ($butt, TRUE, TRUE, 0);
-  $butt->signal_connect (clicked =>
-			 sub {
-			   return  if $tree;
-			   if ($self->{sftp}) {
-			     my $tree_box;
-			     ($tree_box, $tree) = sftp_browser_create ($self->{sftp});
-			     #$table->attach_defaults ($tree_box, 0, 5, 3, 4);
-                             $mainbox->pack_start ($tree_box, TRUE, TRUE, 0);
-			   }
-			   else {::show_msg ('error', ::text ('Not connected'))}
-			 });
-
-  $butt =  Gtk2::Button->new (::text ('Disconnect'));
-  $hbox->pack_start ($butt, TRUE, TRUE, 0);
-  $butt->signal_connect (clicked =>sub {sftp_disconnect ($self);
-					&$status_set()});
-
-  if ($self->{sftp}) {
-    $host_entr->set_text ($self->{sftp_host});
-    $port_entr->set_text ($self->{sftp_port});
-    $login_entr->set_text ($self->{sftp_login});
-    $pass_entr->set_text ($self->{sftp_password});
-    &$status_set ($self->{sftp_host}, $self->{sftp_login});
-  }
-  else {
-    $port_entr->set_text ('22');
-    &$status_set ();
-  }
-
-  $dialog->show_all;
-
-  my $response = $dialog->run;
-
-  if ($self->{sftp}) {
-    $self->{sftp_host} = $host_entr->get_text;
-    $self->{sftp_port} = $port_entr->get_text;
-    $self->{sftp_login} = $login_entr->get_text;
-    $self->{sftp_password} = $pass_entr->get_text;
-
-    $self->{protocol_label}->set_text ($login_entr->get_text
-				       .'@'. $host_entr->get_text);
-
-    if ($tree) {
-      my $sel_iter = $tree->get_selection()->get_selected();
-      my $dir = tree_path ($tree, $sel_iter);
-      $self->{entry}->set_text ($dir);
-    }
-    else {
-      #$self->{entry}->set_text ('/');
-    }
-  }
-  $dialog->destroy;
-}
-
 sub set_handler {
   my ($self, $handler) = @_;
   $self->{entry}->signal_connect ('changed' => $handler);
@@ -691,11 +418,6 @@ sub get {
   $path =~ s/\/$//;
   set ($self, $path);
   return $path;
-}
-
-sub sftp {
-  my $self = shift;
-  return $self ->{sftp};
 }
 
 sub set {
@@ -730,7 +452,7 @@ use URI::Escape;
 
 use strict;
 
-my ($start_dir_a, $start_dir_b, $sftp_a);
+my ($start_dir_a, $start_dir_b);
 my ($icon_data, $lang, %local_text, %help_text);
 
 my $dir_box_a;
@@ -776,8 +498,8 @@ sub create_window {
 
   my $mainbox = Gtk2::VBox->new ();
 
-  $dir_box_a = Dir_Box->new (label => 'A:');
-  $dir_box_b = Dir_Box->new (label => 'B:', sftp_disable => 1);
+  $dir_box_a = Dir_Box->new (label => 'A');
+  $dir_box_b = Dir_Box->new (label => 'B');
 
   $mainbox->pack_start ($dir_box_a->box, FALSE, FALSE, 0);
   $mainbox->pack_start ($dir_box_b->box, FALSE, FALSE, 0);
@@ -803,7 +525,7 @@ sub create_window {
   $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
 
   # bit flags for control  menu item show
-  # 1- need A, 2 - need B, 4 - local (not sftp) files
+  # 1- need A, 2 - need B
   my $menu = Menu::create ({caption => 'Select files in dir',
 			    handler => \&select_files_in_dir,
 			    opt => 0},
@@ -830,7 +552,7 @@ sub create_window {
 			   {caption=>'---'},
 			   {caption=>'Copy A to clipboard',
 			    handler => sub {clipboard_copy('a')},
-                            opt => 1 | 4},
+                            opt => 1},
 			   {caption=>'Copy B to clipboard',
 			    handler => sub {clipboard_copy('b')},
                             opt => 2},
@@ -1012,71 +734,21 @@ sub check_path {
   return undef;
 }
 
-sub sftp_check_path {
-  my $path = shift;
-  my $loop;
-  $loop = sub {
-    my $p = shift;
-    my $d = dirname ($p);
-    unless (-d $d) {
-      &$loop ($d);
-    }
-    if ($p eq $path) {
-      return undef;
-    }
-    else {
-      my $res = $sftp_a->mkdir($p);
-      return "error sftp mkdir '$p':$res:"
-	. decode ('utf-8', $sftp_a->error) if not $res;
-    };
-  };
-
-  &$loop ($path);
-}
-
 sub move_or_copy {
   my ($name,  $src, $move) = @_;
   my $path_a =  $start_dir_a . '/' . $name;
   my $path_b =  $start_dir_b . '/' . $name;
 
-  if ($sftp_a) {
-    if ($src eq 'a') {
-      my $err = check_path ($path_b);
-      $err and return $err;
+  my ($s, $d) = ($src eq 'a' ? ($path_a, $path_b) : ($path_b, $path_a));
+  my $err = check_path ($d);
+  $err and return $err;
 
-      $sftp_a->get ($path_a, $path_b, overwrite => 1)
-	or return "error get remote file '$path_a'\nto '$path_b':"
-	  . decode ('utf-8', $sftp_a->error);
-
-      if ($move) {
-	$sftp_a->remove ($path_a)
-	  or return "error remove remote file '$path_a':"
-	    . decode ('utf-8', $sftp_a->error);
-      }
-    }
-    else  {#src=b
-      my $err = sftp_check_path ($path_a);
-      $err and return $err;
-
-      $sftp_a->put ($path_b, $path_a, overwrite => 1)
-	or return "error put file '$path_b' to remote '$path_a':"
-	  . decode ('utf-8', $sftp_a->error);
-
-      unlink $path_b or return "error delete local '$path_b'" if $move;
-    }
+  if ($move) {
+    move ($s, $d) or return "move error:'$s'\nto '$d'";
+  } else {
+    copy ($s, $d) or return "copy error:'$s'\nto '$d'";
   }
-  else { #local copy
-    my ($s, $d) = ($src eq 'a' ? ($path_a, $path_b) : ($path_b, $path_a));
-    my $err = check_path ($d);
-    $err and return $err;
 
-    if ($move) {
-      move ($s, $d) or return "move error:'$s'\nto '$d'";
-    }
-    else {
-      copy ($s, $d) or return "copy error:'$s'\nto '$d'";
-    }
-  }
   return undef;
 }
 
@@ -1094,15 +766,8 @@ sub oper_del {
   my ($name, $letter) = @_;
   my $path = ($letter eq 'a' ? $start_dir_a : $start_dir_b)
     . '/' . $name;
+  unlink $path or return "error delete local '$path'";
 
-  if ($letter eq 'a' and $sftp_a) {
-    $sftp_a->remove ($path)
-      or return "error remove remote file '$path':" 
-	. decode ('utf-8', $sftp_a->error);
-  }
-  else {
-    unlink $path or return "error delete local '$path'"
-  }
   return '';
 }
 
@@ -1192,16 +857,6 @@ sub open_with {
 
   my $name = $dir . '/'. Result_List::selected_name();
 
-  if ($sftp_a and $letter eq 'a') {
-    $name = eval {
-      return sftp_tmp_copy ($sftp_a, $name);
-    };
-    if ($@) {
-      show_msg ("SFTP error:$@\n");
-      return;
-    }
-  }
-
   if (-f $name) {
     if (not fork) {
       print STDERR "open:@cmd $name\n";
@@ -1248,7 +903,7 @@ sub copy_to_dlg {
 				  ['modal', 'destroy-with-parent'],
 				  'gtk-cancel' => 'cancel',
 				  'gtk-ok'     => 'ok');
-  my $dirbox = Dir_Box->new (label=> '', sftp_disable => 1, butt_size => 50);
+  my $dirbox = Dir_Box->new (label=> '');
   $dialog->vbox->add ($dirbox->box);
 
   $dialog->set_default_response ('cancel');
@@ -1262,22 +917,7 @@ sub copy_to_dlg {
     my $src = ($letter eq 'a'? $start_dir_a: $start_dir_b)
                 . '/'. $name;
     #print "copy to:$src->$dst\n";
-
-    if ($sftp_a and $letter eq 'a') {#copy from sftp to local
-      my $err = check_path ($dst);
-      if ($err) {
-	show_msg ('error', $err);
-      }
-      else {
-	$sftp_a->get ($src, $dst, overwrite => 1)
-	  or show_msg ('error',
-		       "error get remote file '$src'\nto '$dst':"
-		       . decode ('utf-8', $sftp_a->error));
-      }
-    }
-    else {#local copy
-      copy ($src, $dst) or show_msg ('error', "copy error:'$src'\nto '$dst'");
-    }
+    copy ($src, $dst) or show_msg ('error', "copy error:'$src'\nto '$dst'");
   }
 }
 
@@ -1291,16 +931,6 @@ sub diff_files {
 
   my $path_a =  $dir_box_a->get . '/'. $row{name};
   my $path_b =  $dir_box_b->get . '/'. $row{name};
-
-  if ($sftp_a) {
-      $path_a = eval {
-      sftp_tmp_copy ($sftp_a, $path_a);
-    };
-    if ($@) {
-      show_msg ("SFTP error:$@\n");
-      return;
-    }
-  }
 
   open my $fh, '-|', 'diff', '-u', $path_a, $path_b or die "Can't open pipe: $!";
   my $out;
@@ -1337,7 +967,6 @@ sub select_files_in_dir {
     $dir_entr->prepend_text ($pp);
   }
   $dir_entr->set_active (0);
-
 
   my %chk = (a_del  => 'del A',
 	     b_del  => 'del B',
@@ -1403,7 +1032,7 @@ sub gui_upd {
     {Glib::MainContext->default->iteration (FALSE)};
 }
 
-sub create_local_path_list {
+sub create_path_list {
   my ($start_dir, $res) = @_;
   eval {
     my $cnt = 0;
@@ -1423,69 +1052,9 @@ sub create_local_path_list {
   }
 }
 
-sub sftp_tmp_copy {
-  my ($sftp, $path) = @_;
-
-  require File::Temp;
-
-  my ($name, $dir, $suff) = fileparse ($path,  qr/\.[^.]*$/);
-  my $tmp = File::Temp->new( TEMPLATE => "$name-$main_title-sftp-XXXXX",
-			     DIR      => '/tmp',
-                             SUFFIX   => $suff,
-			     UNLINK   => 0);
-  $sftp->get ($path, $tmp) or die "error get remote file\n'$path'\nto\n'$tmp'";
-  push @tmp_files, {file=>$tmp, orig=>$path, info=>'sftp'};
-  return $tmp;
-}
-
-sub create_sftp_path_list {
-  my ($sftp, $start_dir, $res) = @_;
-  eval {
-    $sftp->find ($start_dir,
-		 wanted =>
-		 sub {
-                   die if $break_oper;
-		   my $f = $_[1];
-		   my $n = $f->{filename};
-		   my $p = substr $n, length $start_dir;
-
-		   return if ! $p;
-
-		   # name(relative path) => attributes
-		   my $type = file_type_format ($f->{a}->perm);
-		   $res->{$p} = {type  => $type,
-				 size  => num_format ($f->{a}->size),
-				 ctime => '',
-				 mtime => time_format ($f->{a}->mtime),
-				 perm  => perm_format ($f->{a}->perm),
-				 owner => $f->{a}->uid . ':' . $f->{a}->gid,
-				 other => ''} if $type eq 'file';
-
-		   gui_upd();
-		 });
-  };
-  if ($@ and ! $break_oper) {
-    show_msg ('error', "Find remote files error: $@\n$start_dir");
-  }
-}
-
-sub create_path_list {
-  my ($sftp, $start_dir, $res) = @_;
-  $sftp ? create_sftp_path_list ($sftp, $start_dir, $res) :
-    create_local_path_list ($start_dir, $res);
-}
-
 sub comp_content {
   my ($path_a, $path_b) = ($start_dir_a . '/'. Result_List::selected_name(),
 			   $start_dir_b . '/'. Result_List::selected_name());
-
-  if ($sftp_a) {
-    $path_a = eval {sftp_tmp_copy ($sftp_a, $path_a)};
-    if ($@) {
-      show_msg ("SFTP error:$@\n");
-      return;
-    }
-  }
 
   my $res = (compare ($path_a, $path_b) == 0 ?
 	     text ("Content is equevalent")
@@ -1500,21 +1069,16 @@ sub start_compare {
   my $show_all = $chk_show_all->get_active;
 
   ($start_dir_a, $start_dir_b) = ($dir_box_a->get, $dir_box_b->get);
-  $sftp_a = $dir_box_a->sftp;
 
-  if ($sftp_a and $check_content) {
-    show_msg ('error', text ('Check content not available with SFTP'));
-    return;
-  }
   Result_List::clear();
 
-  !$sftp_a and $start_dir_a ne $start_dir_b || return;
+  $start_dir_a ne $start_dir_b || return;
 
   my (%names_a, %names_b);
   progress_start (0, text ('get file-list') . ' A');
-  create_path_list ($sftp_a, $start_dir_a, \%names_a);
+  create_path_list ($start_dir_a, \%names_a);
   progress_reset (0, text ('get file-list') . ' B');
-  create_path_list (undef,   $start_dir_b, \%names_b);
+  create_path_list ($start_dir_b, \%names_b);
   progress_reset (0, text ('compare dirs'));
   # print "LIST A:\n";
   # map {print encode ('utf-8',$_),"\n"} sort keys %names_a;
@@ -1572,7 +1136,7 @@ sub menu_popup {
     my $dtype = Result_List::diff_type ($sel[0]);
 
     my $patt = 0;
-    $patt = 4 if not $sftp_a;
+
     if ($dtype eq 'A')    {$patt |= 1}
     elsif ($dtype eq 'B') {$patt |= 2}
     else                  {$patt |= 3};
@@ -1850,14 +1414,6 @@ sub show_help {
 }
 
 
-END {
-  $dir_box_a->sftp_disconnect if $dir_box_a;
-  for my $f (@tmp_files) {
-    print STDERR "cleanup tmp:$f->{file}\n";
-    unlink $f->{file};
-  }
-}
-
 BEGIN {
   $icon_data =<<END_ICON;
 iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBI
@@ -1924,7 +1480,7 @@ END_ICON
 		       {title => 'Overview',
 			text  =>
 "Program compares two directories and allows to synchronize them with full manual control."
-. "\n One of the directories may be remote and accessible via SFTP."
+. "\n For remote sychronisation need mount a remote directory into the local filesystem."
 		       },
 		       {title => 'Compare',
 			text  =>
@@ -1950,13 +1506,6 @@ and test them with any other method."
 . "\n\tdel A\tdelete file from A directory"
 . "\nIf for any file selected 'copy' and 'delete' operation, actually will be performed 'move' operation (if it possible)."
 		       },
-		       {title => 'Remote compare and synchronization (SFTP)',
-			text  =>
-"For use this feature you need install Net::SFTP::Foreign Perl module. It exists in many Linux repo and CPAN."
-. "\nRemote host should allow SSH login."
-. "\nGenerally use of SFTP similar to work with local directories, but for diff and view file, "
-. "remote file will be downloaded into /tmp."
-		       },
 		       {title => 'Context menu',
 			text  =>
 "Context menu (on right-click) provides additional features as diff, view file and copy it into any other directory."
@@ -1968,7 +1517,7 @@ and test them with any other method."
 			text  =>
 "Программа выполняет сравнение двух директорий по составу файлов и их параметрам"
 ." и дальнейшую их синхронизацию с полным ручным контролем."
-."\nОдна из директорий может быть удалённой и доступной по протоколу SFTP."
+."\nДля сравнениия с директорией на другом компьютере нужно смонтировать удалённую файловую систему, например, с помощью gvfs-mount."
 		       },
 		       {title => 'Сравнение директорий',
 			text  =>
@@ -1994,17 +1543,6 @@ and test them with any other method."
 ."\nВ соответствии с предварительно установленными флажками,"
 ." по нажатию кнопки 'выполнить' все операции над файлами выполняются."
 		      },
-		       {title => 'Удалённые сравнения и синхронизация (SFTP)',
-			text  =>
-"Для использования SFTP должен быть установлен Perl-пакет Net::SFTP::Foreign,"
-." обычно это можно сделать посредством пакетного менеджера дистрибутива."
-."\nНа удалённой машине должен организован доступ по SSH."
-."\nВ целом работа через SFTP аналогична работе с локальными директориями, но для некоторых операций (открытие файла, diff, сравнение содержимого) выполняется скачивание файла с удалённой машины в локальную директорию /tmp."
-."\nПри нажатии на кнопку 'SFTP' открывается диалог, позволяющий подключиться к удалённой машине и просмотреть каталоги."
-." В случае каких-либо проблем с соединением, попробуйте войти на удалённую машину клиентом SSH и обычным клиентом SFTP,"
-. " которые есть в составе любого дистрибутива Linux."
-
-		       },
 		       {title => 'Контекстное меню',
 			text  =>
 "Контекстное меню предоставляет ряд дополнительных возможностей для просмотра файла, уточнения его содержимого и копирования в какой-либо другой каталог, отличный от участвующих в сравнении."
