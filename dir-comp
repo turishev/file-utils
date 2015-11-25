@@ -9,7 +9,7 @@ my $main_title  = 'dir-comp';
 my $open_helper = 'exo-open';
 my $editor      = 'leafpad';
 
-our $VERSION='1.01';
+our $VERSION='1.02';
 
 show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 
