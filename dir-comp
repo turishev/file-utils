@@ -280,6 +280,35 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
       }
     }
   }
+
+  sub delete_path_match {
+    my $path = shift;
+
+    for (my $i = 0; $i <= $#{$list->{data}}; $i++) {
+      my $p = substr $list->{data}->[$i]->[$clm{name}], 0, length $path;
+
+      if ($p eq $path) {
+	#print "ig:",$list->{data}->[$i]->[$clm{name}],  "\n";
+	delete_item ($i);
+      }
+    }
+
+    my $model = $list->get_model;
+    my $iter = $model->get_iter_first;
+
+    while (defined $iter) {
+      my $name = $model->get_value ($iter, $clm{name});
+      my $p = substr $name, 0, length $path;
+
+      if ($p eq $path) {
+	#print "ig:$name\n";
+	my $next = $model->iter_next ($iter);
+
+	$model->remove ($iter);
+        $iter = $next;
+      } else {$iter = $model->iter_next ($iter)}
+    }
+  }
 }
 
 # END Result_List ####################################################
@@ -528,6 +557,9 @@ sub create_window {
   # 1- need A, 2 - need B
   my $menu = Menu::create ({caption => 'Select files in dir',
 			    handler => \&select_files_in_dir,
+			    opt => 0},
+			   {caption => 'Ignore files (dirs)',
+			    handler => \&ignore_path,
 			    opt => 0},
 			   {caption=> 'Open A',
                             handler => sub {open_handler('a')},
@@ -942,7 +974,7 @@ sub diff_files {
 
 sub select_files_in_dir {
   my $file = Result_List::selected_name ();
-  print "select_files_in_dir:$file\n";
+  #print "select_files_in_dir:$file\n";
   my @path = split '/', $file;
   pop @path; # remove file name
 
@@ -1021,8 +1053,48 @@ sub select_files_in_dir {
     for my $k (keys %chk) {
       push @checks, $k if $chk{$k}->get_active;
     }
-    print "set checks:$path @checks\n";
+    #print "set checks:$path @checks\n";
     Result_List::set_checks_for_dir ($path, @checks)
+  }
+}
+
+sub ignore_path {
+  my $file = Result_List::selected_name ();
+  print "select_files_in_dir:$file\n";
+  my @path = split '/', $file;
+ # pop @path; # remove file name
+
+  my $dialog = Gtk2::Dialog->new (::text ("Directory synchronization"),
+  				  $main_window,
+  				  ['modal', 'destroy-with-parent'],
+				  'gtk-cancel' => 'cancel',
+                                  'gtk-ok' => 'ok');
+  my $mainbox = Gtk2::VBox->new (FALSE, 20);
+  $dialog->vbox->add ($mainbox);
+
+
+  my $dir_entr = Gtk2::ComboBox->new_text;
+  $mainbox->pack_start ($dir_entr, FALSE, FALSE, 0);
+
+  my $hbox  = Gtk2::HBox->new ();
+  $mainbox->pack_start ($hbox, FALSE, FALSE, 0);
+
+  my $pp = '';
+  for my $p (@path) {
+    $pp .= ($pp ? '/':'') . $p;
+    $dir_entr->prepend_text ($pp);
+  }
+  $dir_entr->set_active (0);
+
+  $dialog->show_all;
+  my $response = $dialog->run;
+
+  $dialog->destroy;
+
+  if ($response eq 'ok') {
+    my $path =  $dir_entr->get_active_text;
+    #print "ignore:$path\n";
+    Result_List::delete_path_match ($path)
   }
 }
 
@@ -1085,6 +1157,8 @@ sub start_compare {
   # print "LIST B:\n";
   # map {print encode ('utf-8',$_),"\n"} sort keys %names_b;
 
+  progress_reset (0, text ('start compare'));
+
   for my $f (keys %names_a) {
     if (! exists $names_b{$f}) {
       Result_List::add ($f, $names_a{$f}, '', 'A');
@@ -1115,6 +1189,8 @@ sub start_compare {
 
   progress_end ();
 
+  progress_reset (0, text ('end compare'));
+  
   Result_List::row_count == 0 and ! $break_oper
       and show_msg ('info', text ('No differences were found'));
 
