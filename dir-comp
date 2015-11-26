@@ -465,6 +465,60 @@ sub focus {
 }
 # END Dir_Box ########################################################
 
+package Selector;
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+sub new {
+  my $class = shift;
+
+  my $self = {};
+  bless ($self, $class);
+
+  my $hbox = Gtk2::HBox->new();
+
+  my $combo = Gtk2::ComboBox->new_text;
+  $hbox -> pack_end ($combo, TRUE, TRUE, 0);
+
+  my @vals;
+  while (my $k = shift @_) {
+    my $lb = shift;
+    $combo->append_text ($lb);
+    push @vals, $k;
+  }
+
+  $combo->set_active (0);
+  $self->{combo} = $combo;
+  $self->{box}   = $hbox;
+  $self->{vals} = [@vals];
+
+  return  $self;
+}
+
+sub set_label {
+  my $self = shift;
+  my $lb = Gtk2::Label->new(shift);
+  $self->box->pack_start ($lb, FALSE, FALSE, 0);
+}
+
+sub set_size {
+  my $self = shift;
+  $self->{combo}->set_size_request (shift);
+}
+
+sub box {
+  my $self = shift;
+  return $self ->{box};
+}
+# return string value instead indeax in combo or lable text
+sub get {
+  my $self = shift;
+  return $self->{vals}[$self->{combo}->get_active];
+}
+
+# END Mode_Selector #################################################
+
+
 package main;
 use Encode;
 use Glib qw /TRUE FALSE/;
@@ -491,6 +545,7 @@ my $chk_content;
 my $chk_size;
 my $chk_show_all;
 my $progress_bar;
+my $mode_box;
 my $main_window = create_window ();
 
 my $break_oper = 0;
@@ -535,6 +590,16 @@ sub create_window {
 
   # кнопки управления
   my $hbox = Gtk2::HBox->new (FALSE, 5);
+
+  $mode_box = Selector->new('ab' => 'A <-> B',
+			    'a'  => 'A  -> B',
+			    'b'  => 'B  -> A');
+  #$mode_box -> set_label ('mode');
+  #$mode_box -> set_size (80);
+
+  $hbox -> pack_start ($mode_box->box, FALSE, FALSE, 0);
+
+
   my $butt;
 
   $chk_size = Gtk2::CheckButton->new (text ('size'));
@@ -550,6 +615,7 @@ sub create_window {
 
   $chk_show_all = Gtk2::CheckButton->new (text ('show all'));
   $hbox -> pack_start ($chk_show_all, FALSE, FALSE, 0);
+
 
   $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
 
@@ -1060,9 +1126,8 @@ sub select_files_in_dir {
 
 sub ignore_path {
   my $file = Result_List::selected_name ();
-  print "select_files_in_dir:$file\n";
+
   my @path = split '/', $file;
- # pop @path; # remove file name
 
   my $dialog = Gtk2::Dialog->new (::text ("Directory synchronization"),
   				  $main_window,
@@ -1146,11 +1211,15 @@ sub start_compare {
 
   $start_dir_a ne $start_dir_b || return;
 
+  my $comp_mode = $mode_box->get;
+
   my (%names_a, %names_b);
+
   progress_start (0, text ('get file-list') . ' A');
   create_path_list ($start_dir_a, \%names_a);
   progress_reset (0, text ('get file-list') . ' B');
   create_path_list ($start_dir_b, \%names_b);
+
   progress_reset (0, text ('compare dirs'));
   # print "LIST A:\n";
   # map {print encode ('utf-8',$_),"\n"} sort keys %names_a;
@@ -1159,18 +1228,31 @@ sub start_compare {
 
   progress_reset (0, text ('start compare'));
 
-  for my $f (keys %names_a) {
-    if (! exists $names_b{$f}) {
-      Result_List::add ($f, $names_a{$f}, '', 'A');
-    }
-    else {
+  my ($base_list, $other_list, $base_letter, $other_letter);
+  if ($comp_mode eq 'b') {
+    $base_list = \%names_b;
+    $other_list = \%names_a;
+    $base_letter = 'B';
+    $other_letter = 'A';
+
+  } else {
+    $base_list = \%names_a;
+    $other_list = \%names_b;
+    $base_letter = 'A';
+    $other_letter = 'B';
+  }
+
+  for my $f (keys %$base_list) {
+    if (! exists $other_list->{$f}) {
+      Result_List::add ($f, $base_list->{$f}, '', $base_letter);
+    } else {
       my ($diff);
       $check_size and $names_a{$f}->{size} ne $names_b{$f}->{size} and $diff .= 's';
       $check_date and $names_a{$f}->{mtime} ne $names_b{$f}->{mtime} and $diff .= 't';
 
       if ($check_content) {
-	 $diff .= 'c' if $names_a{$f}->{size} ne $names_b{$f}->{size} or
-	   compare ($start_dir_a .'/' . $f, $start_dir_b . '/' . $f);
+	$diff .= 'c' if $names_a{$f}->{size} ne $names_b{$f}->{size} or
+	  compare ($start_dir_a .'/' . $f, $start_dir_b . '/' . $f);
       }
 
       ! $diff and $show_all and  $diff = '=';
@@ -1180,17 +1262,17 @@ sub start_compare {
     progress_next ();
   }
 
-  for my $f (keys %names_b) {
-    if (! exists $names_a{$f}) {
-      Result_List::add ($f, '', $names_b{$f}, 'B');
+  if ($comp_mode eq 'ab') {
+    for my $f (keys %$other_list) {
+      if (! exists $base_list->{$f}) {
+	Result_List::add ($f, '', $other_list->{$f}, $other_letter);
+      }
+      progress_next ();
     }
-    progress_next ();
   }
 
   progress_end ();
 
-  progress_reset (0, text ('end compare'));
-  
   Result_List::row_count == 0 and ! $break_oper
       and show_msg ('info', text ('No differences were found'));
 
@@ -1593,21 +1675,22 @@ and test them with any other method."
 			text  =>
 "Программа выполняет сравнение двух директорий по составу файлов и их параметрам"
 ." и дальнейшую их синхронизацию с полным ручным контролем."
-."\nДля сравнениия с директорией на другом компьютере нужно смонтировать удалённую файловую систему, например, с помощью gvfs-mount."
+."\nДля сравнениия локальной директории с директорией на другом компьютере нужно смонтировать удалённую файловую систему, например, с помощью gvfs-mount."
 		       },
 		       {title => 'Сравнение директорий',
 			text  =>
-"В результирующем списке сравнения показываются только обычные файлы, директории и специальные файлы"
+"Выпадающий список слева устанавливает режим синхронизации двухстронняя или односторонняя (A<->B, A->B, B->A). В случае двухсторонней синхронизации в с списке отличий будут показываться файлы отсутствующие в ЛЮБОЙ из двух директорий или отличающиеся параметрами (в соответствии с установленными флажками). Это режим по умолчанию. В случае одностороней синхронизации, например A->B, учитываются только те файлы, которые присутствуют в директории A. Это позволяет сократить список, ускорить сравнение и операции и уменьшить использование ресурсов."
+. "\n\nВ результирующем списке сравнения показываются только обычные файлы, директории и специальные файлы"
 ." (файлы устройств, сокеты, каналы) не показываются."
 ." Также файлы могут быть не показаны, если чтение каталога запрещено данному пользователю."
-."\nДля каждого файла в графе 'отлич' проставляются символы, кратко обозначающие найденные отличия."
+."\n\nДля каждого файла в графе 'отлич' проставляются символы, кратко обозначающие найденные отличия."
 ." Если файл присутствует только в одном каталоге проставляется сответственно символ A или B,"
 ." в остальных случаях в зависимости от результатов сравнения."
 ."\nОпции сравнения:"
-."\n\t'размер'   \tсравнивать размер файлов, проставляет флажок 's'"
-."\n\t'время'    \tсравнивать время модификации файлов (mtime), проставляет флажок 't'"
-."\n\t'содержимое'\tсравнивать размер файлов, проставляет флажок 'c'"
-."\n\t'показать всё'\tпоказать также файлы отличий в которых не найдено, для них проставляет флажок '='"
+."\n\t'размер'   \tсравнивать размер файлов, проставляется флажок 's'"
+."\n\t'время'    \tсравнивать время модификации файлов (mtime), проставляется флажок 't'"
+."\n\t'содержимое'\tсравнивать размер файлов, проставляется флажок 'c'"
+."\n\t'показать всё'\tпоказать также файлы отличий в которых не найдено, для них проставляется флажок '='"
 		       },
 		       {title => 'Операции',
 			text  =>
