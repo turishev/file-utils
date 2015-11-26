@@ -535,7 +535,7 @@ use URI::Escape;
 
 use strict;
 
-my ($start_dir_a, $start_dir_b);
+my ($start_dir_a, $start_dir_b, @ignore_list);
 my ($icon_data, $lang, %local_text, %help_text);
 
 my $dir_box_a;
@@ -625,7 +625,7 @@ sub create_window {
 			    handler => \&select_files_in_dir,
 			    opt => 0},
 			   {caption => 'Ignore files (dirs)',
-			    handler => \&ignore_path,
+			    handler => \&ignore_path_dlg,
 			    opt => 0},
 			   {caption=> 'Open A',
                             handler => sub {open_handler('a')},
@@ -687,6 +687,12 @@ sub create_window {
 
   $exe_butt->signal_connect (clicked => \&operation_do, $comp_butt);
   $comp_butt->signal_connect (clicked => \&start_compare, $exe_butt);
+
+
+  $butt = Gtk2::Button->new (text ('Clear ignore list'));
+  $butt->signal_connect (clicked => sub {@ignore_list = ();},
+			 $window);
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
 
 
   $butt = Gtk2::Button->new (text ('Help'));
@@ -1124,7 +1130,7 @@ sub select_files_in_dir {
   }
 }
 
-sub ignore_path {
+sub ignore_path_dlg {
   my $file = Result_List::selected_name ();
 
   my @path = split '/', $file;
@@ -1159,7 +1165,8 @@ sub ignore_path {
   if ($response eq 'ok') {
     my $path =  $dir_entr->get_active_text;
     #print "ignore:$path\n";
-    Result_List::delete_path_match ($path)
+    Result_List::delete_path_match ($path);
+    push @ignore_list, $path;
   }
 }
 
@@ -1167,6 +1174,15 @@ sub gui_upd {
   progress_next ();
   while (Glib::MainContext->default->pending)
     {Glib::MainContext->default->iteration (FALSE)};
+}
+
+sub ignored {
+  my $path = shift;
+  for my $p (@ignore_list) {
+    return 1 if (substr $path, 1, length $p) eq $p;
+    # индекс с 1 потому что нулевой символ $path - /, его нет в @ignore_list
+  }
+  return 0;
 }
 
 sub create_path_list {
@@ -1178,8 +1194,12 @@ sub create_path_list {
             return if /^\.\.?$/;
             my $path = decode ('utf8', $File::Find::name);
 	    my $p = substr $path, length $start_dir;
-            my %attr = get_file_info ($path);
-            $res->{$p} = {%attr} if $attr{type} eq 'file';
+
+	    if (! ignored ($p)) {
+	      my %attr = get_file_info ($path);
+	      $res->{$p} = {%attr} if $attr{type} eq 'file';
+	    }
+
             gui_upd (), $cnt = 0 if $cnt++ >= 20;
 	  }},
 	  encode ('utf8', $start_dir));
@@ -1632,6 +1652,7 @@ END_ICON
                  'Select dir'            => {ru => 'Выбрать каталог'},
                  'Disconnect'            => {ru => 'Отключиться'},
                  'Not connected'         => {ru => 'Не подключено'},
+		 'Clear ignore list'     => {ru => 'Очистить игнорируемые'},
 		);
 
   %help_text = (en => [
