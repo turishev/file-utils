@@ -25,7 +25,7 @@ my $editor="leafpad";
 my $open_helper = 'exo-open';
 my $main_title = 'file-search';
 
-my %default = (name_mode           => 'glob', # glob, regexp, simple
+my %default = (name_mode           => 'simple', # glob, regexp, simple
 	       name_case_sensitive => 0,
                directory => decode ('utf-8', $ENV{PWD}),
                text_case_sensitive => 0);
@@ -1346,7 +1346,7 @@ sub new {
   $mode->append_text ('glob');
   $mode->append_text ('regexp');
   $mode->append_text ('simple');
-  $mode->set_size_request (64, -1);
+  $mode->set_size_request (68, -1);
   $hbox->pack_start ($mode, FALSE, FALSE, 0);
 
   my $case_cb = Gtk2::CheckButton->new (::text ("case-sensitive"));
