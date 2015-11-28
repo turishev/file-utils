@@ -22,7 +22,8 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
   use Gtk2::SimpleList;
   use File::Basename;
 
-  my @clmns = ({id=>'name',    caption=>::text ('name'),  type=>'text', align=> 0},
+  my @clmns = ({id=>'type',    caption=>::text ('T'),  type=>'text', align=> 0},
+	       {id=>'name',    caption=>::text ('name'),  type=>'text', align=> 0},
 	       {id=>'diff',    caption=>::text ('diff'),  type=>'text', align=> 0.5},
 	       {id=>'a_cp',    caption=>'A->B',  type=>'bool', align=> 0.5},
 	       {id=>'a_del',   caption=>'del A', type=>'bool', align=> 0.5},
@@ -46,6 +47,8 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
   my $scroll;
   my @save_selection;
 
+  my %disbl_rows;
+
   $list = Gtk2::SimpleList->new (map {($_->{caption}, $_->{type})} @clmns);
   #$list->signal_connect('' => \&Result_List::list_click_hnd);
 
@@ -63,7 +66,7 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     $r->set('xalign', $clmns[$i]{align});
     if ($clmns[$i]{type} eq 'bool') {
       $r->signal_connect ('toggled' => Result_List::check_box_hnd);
-      $clm->set_cell_data_func ($r, \&bool_randr_func);
+      $clm->set_cell_data_func ($r, \&bool_randr_func, $i);
     }
   }
 
@@ -92,226 +95,303 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
    @save_selection = ();
  }
 
-  # on any cell rendering
+ # on any cell rendering
  sub bool_randr_func {
-    my ($column, $renderer, $model, $iter) = @_;
-    my $col = $renderer->{column_index};
-    my $id = $clmns[$col]{id};
-    my $dtype  = ($model->get ($iter))[$clm{diff}];
+   my ($column, $renderer, $model, $iter, $c) = @_;
+   #print "c:$c\n";
+   my $col_index = $renderer->{column_index};
+   my $id = $clmns[$col_index]{id};
+   my $dtype  = ($model->get ($iter))[$clm{diff}];
 
-    if ($dtype eq 'A' and ($id eq 'b_del' or $id eq 'b_cp')
-        or $dtype eq 'B' and ($id eq 'a_del' or $id eq 'a_cp')) {
-      $renderer->set('visible' , FALSE);
-    }
-    else {
-      #$renderer->set('inconsistent' , TRUE);
-      $renderer->set('visible' , TRUE);
-    }
-  }
+   if ($dtype eq 'A' and ($id eq 'b_del' or $id eq 'b_cp')
+       or $dtype eq 'B' and ($id eq 'a_del' or $id eq 'a_cp')) {
+     $renderer->set('visible' , FALSE);
+   } else {
+     $renderer->set('visible' , TRUE);
+   }
+   #print $model->get_string_from_iter ($iter), "\n";
+   $renderer->set('sensitive' , FALSE);
 
-  sub sort_int {
-    my $col_num = pop;
-    my ($list, @iter) = @_;
-    @iter = map {$_ = $list->get($_, $col_num); $_=~s/_//g; $_} @iter;
-    return ($iter[0] <=> $iter[1]);
-  }
+   if (exists $disbl_rows{$model->get_value ($iter, $clm{name})} ) {
+     $renderer->set('sensitive' , FALSE);
+     $renderer->set('activatable'  , FALSE);
+   } else {
+     $renderer->set('sensitive' , TRUE);
+     $renderer->set('activatable'  , TRUE);
+   }
+ }
 
-  sub click_column_hnd {
-    my ($widget, $data) = @_;
-    # print "click_column_hnd\n";
-  }
+ sub sort_int {
+   my $col_num = pop;
+   my ($list, @iter) = @_;
+   @iter = map {$_ = $list->get($_, $col_num); $_=~s/_//g; $_} @iter;
+   return ($iter[0] <=> $iter[1]);
+ }
 
-  sub check_box_hnd {
-    my ($renderer, $row) = @_;
-    my $col = $renderer->{column_index};
-    my $model = $list->get_model;
-    #print "check_box_hnd:$row,$col\n";
+ sub click_column_hnd {
+   my ($widget, $data) = @_;
+   # print "click_column_hnd\n";
+ }
 
-    @save_selection = selected_inx();#save to restore
-    my $check_on_sel = 0;
+ sub check_dirs {
+   my ($indexes, $value) = @_;
+   my $model = $list->get_model;
 
-    for my $k (@save_selection) {
-      if ($k == $row) {
-        # click on in selection area
-	$check_on_sel = 1;
-	last;
-      }
-    }
+   for my $inx (@$indexes) {
+     my $dir = name ($inx);
+     $iter = $model->get_iter_first;
 
-    if ($check_on_sel) {
-      $val = $list->{data}->[$row]->[$col];
+     while (defined $iter) {
+       my $name = $model->get_value ($iter, $clm{name});
+       my $p = substr $name, 0, length $dir;
+       my $file_iter_str = $model->get_string_from_iter($iter);
 
-      if ($#save_selection > 0
-	  and $row >= $save_selection[0]
-	  and $row <= $save_selection[$#save_selection]) {
+       if ($p eq $dir and $name ne $dir) {
+	 if ($value) {
+	   #print "dis:$file_iter_str,$name\n";
+	   $disbl_rows{$name} = 1;
+	   $model->set_value ($iter, $clm{a_cp}, FALSE);
+	   $model->set_value ($iter, $clm{b_cp}, FALSE);
+	   $model->set_value ($iter, $clm{a_del}, FALSE);
+	   $model->set_value ($iter, $clm{b_del}, FALSE);
+	 } else {
+	   #print "en:$file_iter_str, $name\n";
+	   delete $disbl_rows{$name};
+	 }
+       }
+       $iter = $model->iter_next ($iter);
+     }
+   }
+ }
 
-	for my $i (@save_selection) {
-	  if (col_visible ($i, $col))   {
-	    $list->{data}->[$i]->[$col] = $val;
-	  }
-	}
-      }
-    }
-    else {@save_selection = ()} # delete seletion
-  }
+ sub dir_or_file {
+   my $i = shift;
+   return 'D' if $list->{data}->[$i]->[$clm{type}] eq 'D';
+   return 'F';
+ }
+ ;
 
-  sub clear {
-    $list->get_model->clear;
-  }
+ sub validate_sel {
+   my ($sel) = @_;
+   #print "validate sel\n";
 
-  # добавление результата в список найденного
-  sub add {
-    my ($name, $info_a, $info_b, $diff) = @_;
-    my ($status);
+   my $type;
 
-    $name =~ s/^\///;
+   for my $i (@{$sel}) {
+     $type = dir_or_file ($i) if not $type;
+     return 'E' if dir_or_file ($i) ne $type;
+     # нельзя смешивать файлы и директории
+   }
+   return $type;
+ }
 
-    $status = $diff;
+ sub check_box_hnd {
+   my ($renderer, $row) = @_;
+   my $col = $renderer->{column_index};
+   my $model = $list->get_model;
+   #print "check_box_hnd:$row,$col\n";
 
-    # if ($status ne 'A' and $status ne 'B') {
-    # 	$status .= ($info_a->{perm} ne  $info_b->{perm} ?'p':'')
-    # 	  . ($info_a->{owner} ne  $info_b->{owner} ?'o':'');
-    # }
+   my $val = $list->{data}->[$row]->[$col];
 
-    my @data;
-    $data[$clm{name}]    = $name;
-    $data[$clm{diff}]    = $status;
-    $data[$clm{size_a}]  = $info_a->{size};
-    $data[$clm{size_b}]  = $info_b->{size};
-    $data[$clm{time_a}]  = $info_a->{mtime};
-    $data[$clm{time_b}]  = $info_b->{mtime};
-    $data[$clm{perm_a}]  = $info_a->{perm};
-    $data[$clm{perm_b}]  = $info_b->{perm};
-    $data[$clm{owner_a}] = $info_a->{owner};
-    $data[$clm{owner_b}] = $info_b->{owner};
-    $data[$clm{a_del}]   = FALSE;
-    $data[$clm{b_del}]   = FALSE;
-    $data[$clm{a_cp}]    = FALSE;
-    $data[$clm{b_cp}]    = FALSE;
+   @save_selection = selected_inx(); #save to restore
 
-    push @{$list->{data}}, [@data];
-  }
+   my $check_on_sel = 0;
 
-  sub get_oper_inx_list {
-    my $result = shift;
-    my $l = $list->{data};
-    my $c = row_count();
+   for my $k (@save_selection) {
+     if ($k == $row) {
+       # click on in selection area
+       $check_on_sel = 1;
+       last;
+     }
+   }
 
-    for (my $i = 0; $i < $c; $i++) {
-      push @$result, $i if $l->[$i]->[$clm{a_del}]
-      	or $l->[$i]->[$clm{b_del}]
-      	  or $l->[$i]->[$clm{a_cp}]
-      	    or $l->[$i]->[$clm{b_cp}];
-    }
-  }
+   if ($check_on_sel) {
+     my $sel_type = validate_sel (\@save_selection);
+     #print "sel_type:$sel_type\n";
 
-  sub selected_inx_0 {
-    my @sel = $list->get_selected_indices();
-    return $sel[0];
-  }
+     if ($sel_type eq 'E') {
+       $list->{data}->[$row]->[$col] = ! $val;
+       ::show_msg ('error', ::text ('files and dirs mix not allowed'));
+       return;
+     }
 
-  sub selected_inx {
-    return $list->get_selected_indices();
-  }
+     if ($#save_selection > 0
+	 and $row >= $save_selection[0]
+	 and $row <= $save_selection[$#save_selection]) {
 
-  # имя выбранного файла
-  sub selected_name {
-    my $inx = selected_inx_0();
-    return @{$list->{data}}[$inx]->[$clm{name}];
-  }
+       for my $i (@save_selection) {
+	 if (col_visible ($i, $col)) {
+	   $list->{data}->[$i]->[$col] = $val;
+	 }
+       }
+     }
 
-  sub diff_type {
-    my $inx = shift;
-    return @{$list->{data}}[$inx]->[$clm{diff}];
-  }
+     check_dirs (\@save_selection, $val) if $sel_type eq 'D';
+   } else {
+     @save_selection = ();	# delete selection
+     check_dirs ([$row], $val) if dir_or_file ($row) eq 'D';
+   }
+ }
 
-  sub name {
-    return @{$list->{data}}[shift]->[$clm{name}];
-  }
+ sub clear {
+   $list->get_model->clear;
+   %disbl_rows = ();
+ }
 
-  sub row {
-    my $inx = shift;
-    return map {$_ => @{$list->{data}}[$inx]->[$clm{$_}]} keys %clm;
-  }
+ # добавление результата в список найденного
+ sub add {
+   my ($name, $info_a, $info_b, $diff) = @_;
+   my ($status);
 
-  sub delete_item {
-    my $n = shift;
-    splice @{$list->{data}}, $n, 1;
-  }
+   $name =~ s/^\///;
 
-  sub grab_focus {
-    $list->grab_focus;
-  }
+   $status = $diff;
 
-  sub row_count {
-    return $#{$list->{data}} + 1;
-  }
+   # if ($status ne 'A' and $status ne 'B') {
+   # 	$status .= ($info_a->{perm} ne  $info_b->{perm} ?'p':'')
+   # 	  . ($info_a->{owner} ne  $info_b->{owner} ?'o':'');
+   # }
 
-  sub box {
-    return $scroll;
-  }
+   my @data;
+   $data[$clm{type}]    = 'D' if $info_a->{type} eq 'dir'
+     or $info_b->{type} eq 'dir';
+   $data[$clm{name}]    = $name;
+   $data[$clm{diff}]    = $status;
+   $data[$clm{size_a}]  = $info_a->{size};
+   $data[$clm{size_b}]  = $info_b->{size};
+   $data[$clm{time_a}]  = $info_a->{mtime};
+   $data[$clm{time_b}]  = $info_b->{mtime};
+   $data[$clm{perm_a}]  = $info_a->{perm};
+   $data[$clm{perm_b}]  = $info_b->{perm};
+   $data[$clm{owner_a}] = $info_a->{owner};
+   $data[$clm{owner_b}] = $info_b->{owner};
+   $data[$clm{a_del}]   = FALSE;
+   $data[$clm{b_del}]   = FALSE;
+   $data[$clm{a_cp}]    = FALSE;
+   $data[$clm{b_cp}]    = FALSE;
 
-  sub col_visible {
-    my ($row, $col) = @_;
-    my $dtype = $list->{data}->[$row]->[$clm{diff}];
-    return ($dtype ne 'B' or $col != $clm{'a_cp'} and $col != $clm{a_del})
-       	  and
-       	  ($dtype ne 'A' or $col != $clm{b_cp} and $col != $clm{b_del});
-  }
+   push @{$list->{data}}, [@data];
+ }
 
-  sub set_checks_for_dir {
-    my $path = shift;
-    my @checks = @_;
+ sub get_oper_inx_list {
+   my $result = shift;
+   my $l = $list->{data};
+   my $c = row_count();
 
-    for (my $i = 0; $i <= $#{$list->{data}}; $i++) {
-      my $p = substr $list->{data}->[$i]->[$clm{name}], 0, length $path;
+   for (my $i = 0; $i < $c; $i++) {
+     push @$result, $i if $l->[$i]->[$clm{a_del}]
+       or $l->[$i]->[$clm{b_del}]
+       or $l->[$i]->[$clm{a_cp}]
+       or $l->[$i]->[$clm{b_cp}];
+   }
+ }
 
-      if ($p eq $path) {
-	#print $list->{data}->[$i]->[$clm{name}],  "\n";
-        for my $c ('a_cp', 'a_del', 'b_cp', 'b_del') {
-	  $list->{data}->[$i]->[$clm{$c}] = FALSE;
-	}
+ sub selected_inx_0 {
+   my @sel = $list->get_selected_indices();
+   return $sel[0];
+ }
 
-        for my $c (@checks) {
-	  if (col_visible ($i, $clm{$c})) {
-	    $list->{data}->[$i]->[$clm{$c}] = TRUE;
-	  }
-	}
-      }
-    }
-  }
+ sub selected_inx {
+   return $list->get_selected_indices();
+ }
 
-  sub delete_path_match {
-    my $path = shift;
+ # имя выбранного файла
+ sub selected_name {
+   my $inx = selected_inx_0();
+   return @{$list->{data}}[$inx]->[$clm{name}];
+ }
 
-    for (my $i = 0; $i <= $#{$list->{data}}; $i++) {
-      my $p = substr $list->{data}->[$i]->[$clm{name}], 0, length $path;
+ sub diff_type {
+   my $inx = shift;
+   return @{$list->{data}}[$inx]->[$clm{diff}];
+ }
 
-      if ($p eq $path) {
-	#print "ig:",$list->{data}->[$i]->[$clm{name}],  "\n";
-	delete_item ($i);
-      }
-    }
+ sub name {
+   return @{$list->{data}}[shift]->[$clm{name}];
+ }
 
-    my $model = $list->get_model;
-    my $iter = $model->get_iter_first;
+ sub row {
+   my $inx = shift;
+   return map {$_ => @{$list->{data}}[$inx]->[$clm{$_}]} keys %clm;
+ }
 
-    while (defined $iter) {
-      my $name = $model->get_value ($iter, $clm{name});
-      my $p = substr $name, 0, length $path;
+ sub delete_item {
+   my $n = shift;
+   splice @{$list->{data}}, $n, 1;
+ }
 
-      if ($p eq $path) {
-	#print "ig:$name\n";
-	my $next = $model->iter_next ($iter);
+ sub grab_focus {
+   $list->grab_focus;
+ }
 
-	$model->remove ($iter);
-        $iter = $next;
-      } else {$iter = $model->iter_next ($iter)}
-    }
-  }
+ sub row_count {
+   return $#{$list->{data}} + 1;
+ }
+
+ sub box {
+   return $scroll;
+ }
+
+ sub col_visible {
+   my ($row, $col) = @_;
+   my $dtype = $list->{data}->[$row]->[$clm{diff}];
+   return ($dtype ne 'B' or $col != $clm{'a_cp'} and $col != $clm{a_del})
+     and
+     ($dtype ne 'A' or $col != $clm{b_cp} and $col != $clm{b_del});
+ }
+
+ sub set_checks_for_dir {
+   my $path = shift;
+   my @checks = @_;
+
+   for (my $i = 0; $i <= $#{$list->{data}}; $i++) {
+     my $p = substr $list->{data}->[$i]->[$clm{name}], 0, length $path;
+
+     if ($p eq $path) {
+       #print $list->{data}->[$i]->[$clm{name}],  "\n";
+       for my $c ('a_cp', 'a_del', 'b_cp', 'b_del') {
+	 $list->{data}->[$i]->[$clm{$c}] = FALSE;
+       }
+
+       for my $c (@checks) {
+	 if (col_visible ($i, $clm{$c})) {
+	   $list->{data}->[$i]->[$clm{$c}] = TRUE;
+	 }
+       }
+     }
+   }
+ }
+
+ sub delete_path_match {
+   my $path = shift;
+   my $model = $list->get_model;
+   my $iter = $model->get_iter_first;
+
+   while (defined $iter) {
+     my $name = $model->get_value ($iter, $clm{name});
+     my $p = substr $name, 0, length $path;
+
+     if ($p eq $path) {
+       #print "ig:$name\n";
+       my $next = $model->iter_next ($iter);
+
+       $model->remove ($iter);
+       $iter = $next;
+     } else {
+       $iter = $model->iter_next ($iter);
+     }
+   }
+ }
+
+ sub size_to_int {
+   my $s = shift;
+   $s =~ s/_//g;
+   return int($s);
+ }
 }
 
-# END Result_List ####################################################
+
+ # END Result_List ####################################################
 
 package Menu;
 use utf8;
@@ -544,12 +624,13 @@ my $chk_date;
 my $chk_content;
 my $chk_size;
 my $chk_show_all;
+my $chk_show_dirs;
 my $progress_bar;
 my $mode_box;
+my $depth_sp;
 my $main_window = create_window ();
 
 my $break_oper = 0;
-
 
 init_controls ();
 
@@ -613,9 +694,17 @@ sub create_window {
   $chk_content = Gtk2::CheckButton->new (text ('content'));
   $hbox -> pack_start ($chk_content, FALSE, FALSE, 0);
 
-  $chk_show_all = Gtk2::CheckButton->new (text ('show all'));
-  $hbox -> pack_start ($chk_show_all, FALSE, FALSE, 0);
+  $chk_show_dirs = Gtk2::CheckButton->new (text ('show dirs'));
+  $hbox -> pack_start ($chk_show_dirs, FALSE, FALSE, 0);
 
+  $chk_show_all = Gtk2::CheckButton->new (text ('show all'));
+  $hbox -> pack_start ($chk_show_all, FALSE, FALSE, 15);
+
+  my $lb = Gtk2::Label->new (text ('search depth') . ':');
+  $hbox -> pack_start ($lb, FALSE, FALSE, 0);
+  $depth_sp = Gtk2::SpinButton->new (Gtk2::Adjustment->new(0,0,100,1,0,0),0,0);
+  $hbox -> pack_start ($depth_sp, FALSE, FALSE, 0);
+ # $depth_entr->set_size_request (32);
 
   $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
 
@@ -640,13 +729,13 @@ sub create_window {
 			   {caption=>'Open B with ..',
 			    handler => sub {open_with_dlg ('b')},
 			    opt => 2},
-                           {caption=>'---'},
-			   {caption=>'Copy A to ..',
-			    handler => sub {copy_to_dlg ('a')},
-			    opt => 1},
-			   {caption=>'Copy B to ..',
-			    handler => sub {copy_to_dlg ('b')},
-			    opt => 2},
+                           # {caption=>'---'},
+			   # {caption=>'Copy A to ..',
+			   #  handler => sub {copy_to_dlg ('a')},
+			   #  opt => 1},
+			   # {caption=>'Copy B to ..',
+			   #  handler => sub {copy_to_dlg ('b')},
+			   #  opt => 2},
 			   {caption=>'---'},
 			   {caption=>'Copy A to clipboard',
 			    handler => sub {clipboard_copy('a')},
@@ -674,9 +763,6 @@ sub create_window {
 
   $mainbox->pack_start ($eventbox, TRUE, TRUE, 0);
 
-#  $progress_bar =Gtk2::ProgressBar->new;
-#  $mainbox->pack_start ($progress_bar, FALSE, FALSE, 0);
-
   # кнопки управления
   $hbox = Gtk2::HBox->new(TRUE);
 
@@ -685,7 +771,7 @@ sub create_window {
   my $exe_butt = Gtk2::Button->new (text ('Execute'));
   $hbox->pack_start ($exe_butt, TRUE, TRUE, 0);
 
-  $exe_butt->signal_connect (clicked => \&operation_do, $comp_butt);
+  $exe_butt->signal_connect (clicked => \&start_operation, $comp_butt);
   $comp_butt->signal_connect (clicked => \&start_compare, $exe_butt);
 
 
@@ -696,7 +782,8 @@ sub create_window {
 
 
   $butt = Gtk2::Button->new (text ('Help'));
-  $butt->signal_connect (clicked => \&show_help, $window);
+#  $butt->signal_connect (clicked => \&show_help, $window);
+  $butt->signal_connect (clicked => \&start_worker, $window);
   $hbox->pack_start ($butt, TRUE, TRUE, 0);
 
   $butt =  Gtk2::Button->new (text ('Exit'));
@@ -838,44 +925,56 @@ sub check_path {
   return undef;
 }
 
-sub move_or_copy {
-  my ($name,  $src, $move) = @_;
+sub is_dir_name {
+  return substr ($_[0], -1,1) eq '/';
+}
+
+sub oper_do {
+  my ($name,  $src, $oper, $file_type, $size) = @_;
   my $path_a =  $start_dir_a . '/' . $name;
   my $path_b =  $start_dir_b . '/' . $name;
-
+  my $is_dir = lc $file_type eq 'd';
   my ($s, $d) = ($src eq 'a' ? ($path_a, $path_b) : ($path_b, $path_a));
-  my $err = check_path ($d);
-  $err and return $err;
 
-  if ($move) {
-    move ($s, $d) or return "move error:'$s'\nto '$d'";
-  } else {
-    copy ($s, $d) or return "copy error:'$s'\nto '$d'";
+  if ($oper ne 'd') {
+    my $err = check_path ($d);
+    $err and return $err;
   }
 
+  if ($is_dir) {
+    eval  {require File::Copy::Recursive;};
+    return "for recursive copy/move/delete operation need module 'File::Copy::Recursive'"
+      if ($@);
+  }
+
+  if ($is_dir) {
+    if ($oper eq 'm') {
+      File::Copy::Recursive::dirmove ($s, $d)
+	  or return "move dir error:'$s'\nto '$d':$!";
+    } elsif ($oper eq 'c') {
+      File::Copy::Recursive::dircopy ($s, $d)
+	  or return "copy dir error:'$s'\nto '$d':$!";
+    } elsif ($oper eq 'd') {
+      File::Copy::Recursive::pathrmdir ($s)
+	  or return "error remove dir '$s':$!";
+    } else {
+      return "error oper type for dir;"
+    }
+  } else {
+    if ($oper eq 'm') {
+      move ($s, $d) or return "move file error:'$s'\nto '$d'";
+    } elsif ($oper eq 'c') {
+      copy ($s, $d) or return "copy file error:'$s'\nto '$d'";
+    } elsif ($oper eq 'd') {
+      unlink $s or return "error delete '$s'";
+    } else {
+      return "error oper type;"
+    }
+  }
   return undef;
 }
 
-sub oper_copy {
-  my ($name,  $src) = @_;
-  return move_or_copy ($name,  $src, 0);
-}
-
-sub oper_move {
-  my ($name,  $src) = @_;
-  return move_or_copy ($name,  $src, 1);
-}
-
-sub oper_del {
-  my ($name, $letter) = @_;
-  my $path = ($letter eq 'a' ? $start_dir_a : $start_dir_b)
-    . '/' . $name;
-  unlink $path or return "error delete local '$path'";
-
-  return '';
-}
-
-sub operation_do {
+sub start_operation {
   my ($err, $too_many_err);
 
   my $check_err = sub {
@@ -909,33 +1008,35 @@ sub operation_do {
     last if $too_many_err or $break_oper;
 
     my %row = Result_List::row ($i);
+    my ($oper, $src, $size);
 
-    if ($row{a_cp} and ! $row{b_cp} and ! $row{b_del}) {
-      if (! $row{a_del}) { # copy A->B
-        &$check_err (oper_copy ($row{name}, 'a'));
-      }
-      else { # move A->B
-        &$check_err (oper_move ($row{name}, 'a'));
-      }
-    }
-    elsif (! $row{a_cp} and ! $row{a_del} and $row{b_cp}) {
-      if (! $row{b_del}) {# copy B->A
-	&$check_err (oper_copy ($row{name}, 'b'));
-      }
-      else {# move B->A
-	&$check_err (oper_move ($row{name}, 'b'));
-      }
-    }
-    elsif (! $row{a_cp} and ! $row{b_cp}) {
+    if (! $row{a_cp} and ! $row{b_cp}) {
+      # удалять можно оба сразу!
       if ($row{a_del}) {
-	&$check_err (oper_del ($row{name}, 'a'));
+	&$check_err (oper_do ($row{name}, 'a', 'd', $row{type}, 0));
       }
       if ($row{b_del}) {
-	&$check_err (oper_del ($row{name}, 'b'));
+	&$check_err (oper_do ($row{name}, 'b', 'd', $row{type}, 0));
       }
     }
+    elsif ($row{a_cp} and ! $row{b_cp} and ! $row{b_del}) {
+      $oper = ($row{a_del} ? 'm' : 'c');
+      $src = 'a';
+      $size = $row{size_a};
+    }
+    elsif (! $row{a_cp} and ! $row{a_del} and $row{b_cp}) {
+      $oper = ($row{b_del} ? 'm' : 'c');
+      $src = 'b';
+      $size = $row{size_b};
+    }
     else {
-      $err .= " oper code error for \n$a \n$b\n"
+      $err .= " oper code error for \n$a \n$b\n";
+      $oper = 'e';
+    }
+
+    if ($oper eq 'c' or $oper eq 'm') {
+      &$check_err (oper_do ($row{name}, $src, $oper, $row{type},
+			    Result_List::size_to_int ($size)));
     }
     gui_upd();
   }
@@ -961,7 +1062,7 @@ sub open_with {
 
   my $name = $dir . '/'. Result_List::selected_name();
 
-  if (-f $name) {
+  if (-e $name) {
     if (not fork) {
       print STDERR "open:@cmd $name\n";
       exec (@cmd, files_uri ($name));
@@ -1000,31 +1101,6 @@ sub open_with_dlg {
   open_with ($letter, @cmd) if $response eq 'ok';
 }
 
-sub copy_to_dlg {
-  my $letter = shift;
-  my $dialog = Gtk2::Dialog->new (uc ($letter) . ": " . text ("copy to .."),
-				  $main_window,
-				  ['modal', 'destroy-with-parent'],
-				  'gtk-cancel' => 'cancel',
-				  'gtk-ok'     => 'ok');
-  my $dirbox = Dir_Box->new (label=> '');
-  $dialog->vbox->add ($dirbox->box);
-
-  $dialog->set_default_response ('cancel');
-  $dialog->show_all;
-  my $response = $dialog->run;
-  my $name = Result_List::selected_name();
-  my $dst = $dirbox->get() . '/' . basename ($name);
-  $dialog->destroy;
-
-  if ($response eq 'ok') {
-    my $src = ($letter eq 'a'? $start_dir_a: $start_dir_b)
-                . '/'. $name;
-    #print "copy to:$src->$dst\n";
-    copy ($src, $dst) or show_msg ('error', "copy error:'$src'\nto '$dst'");
-  }
-}
-
 sub diff_files {
   my %row = Result_List::row (Result_List::selected_inx_0());
 
@@ -1048,8 +1124,10 @@ sub select_files_in_dir {
   my $file = Result_List::selected_name ();
   #print "select_files_in_dir:$file\n";
   my @path = split '/', $file;
-  pop @path; # remove file name
 
+  if (! is_dir_name ($file)) {
+    pop @path; # remove file name
+  }
   my $dialog = Gtk2::Dialog->new (::text ("Directory synchronization"),
   				  $main_window,
   				  ['modal', 'destroy-with-parent'],
@@ -1186,10 +1264,18 @@ sub ignored {
 }
 
 sub create_path_list {
-  my ($start_dir, $res) = @_;
+  my ($start_dir, $res, $show_dirs, $depth) = @_;
   eval {
     my $cnt = 0;
-    find ({wanted => sub {
+    find ({preprocess => ($depth?
+			  sub {my $dep = dir_depth ($File::Find::dir);
+                               #print "$File::Find::dir, d:$dep\n";
+                               if ($dep <= $depth + dir_depth ($start_dir) - 1) {
+				 return @_;
+			       };
+			       return;
+			     } : undef),
+	   wanted => sub {
             die if $break_oper;
             return if /^\.\.?$/;
             my $path = decode ('utf8', $File::Find::name);
@@ -1198,6 +1284,7 @@ sub create_path_list {
 	    if (! ignored ($p)) {
 	      my %attr = get_file_info ($path);
 	      $res->{$p} = {%attr} if $attr{type} eq 'file';
+	      $res->{$p . '/'} = {%attr} if $show_dirs and $attr{type} eq 'dir';
 	    }
 
             gui_upd (), $cnt = 0 if $cnt++ >= 20;
@@ -1219,11 +1306,17 @@ sub comp_content {
   show_msg ('info', $res);
 }
 
+sub dir_depth {
+  return $_[0] =~ tr[/][];
+}
+
 sub start_compare {
   my $check_date = $chk_date->get_active;
   my $check_content  = $chk_content->get_active;
   my $check_size = $chk_size->get_active;
   my $show_all = $chk_show_all->get_active;
+  my $show_dirs = $chk_show_dirs->get_active; #global var
+  my $search_depth = $depth_sp->get_value;
 
   ($start_dir_a, $start_dir_b) = ($dir_box_a->get, $dir_box_b->get);
 
@@ -1236,17 +1329,15 @@ sub start_compare {
   my (%names_a, %names_b);
 
   progress_start (0, text ('get file-list') . ' A');
-  create_path_list ($start_dir_a, \%names_a);
+  create_path_list ($start_dir_a, \%names_a, $show_dirs, $search_depth);
   progress_reset (0, text ('get file-list') . ' B');
-  create_path_list ($start_dir_b, \%names_b);
+  create_path_list ($start_dir_b, \%names_b, $show_dirs, $search_depth);
 
   progress_reset (0, text ('compare dirs'));
   # print "LIST A:\n";
   # map {print encode ('utf-8',$_),"\n"} sort keys %names_a;
   # print "LIST B:\n";
   # map {print encode ('utf-8',$_),"\n"} sort keys %names_b;
-
-  progress_reset (0, text ('start compare'));
 
   my ($base_list, $other_list, $base_letter, $other_letter);
   if ($comp_mode eq 'b') {
@@ -1266,18 +1357,25 @@ sub start_compare {
     if (! exists $other_list->{$f}) {
       Result_List::add ($f, $base_list->{$f}, '', $base_letter);
     } else {
-      my ($diff);
-      $check_size and $names_a{$f}->{size} ne $names_b{$f}->{size} and $diff .= 's';
-      $check_date and $names_a{$f}->{mtime} ne $names_b{$f}->{mtime} and $diff .= 't';
-
-      if ($check_content) {
-	$diff .= 'c' if $names_a{$f}->{size} ne $names_b{$f}->{size} or
-	  compare ($start_dir_a .'/' . $f, $start_dir_b . '/' . $f);
+      if ($names_a{$f}->{type} eq 'dir') {
+	Result_List::add ($f, $names_a{$f}, $names_b{$f}, 'AB') if $show_all;
+	# не выполняем никаких проверок для катологов - просто добавляем
+	# если они есть в списке (в зависимости от show_dirs)
       }
+      else {
+	my ($diff);
+	$check_size and $names_a{$f}->{size} ne $names_b{$f}->{size} and $diff .= 's';
+	$check_date and $names_a{$f}->{mtime} ne $names_b{$f}->{mtime} and $diff .= 't';
 
-      ! $diff and $show_all and  $diff = '=';
+	if ($check_content) {
+	  $diff .= 'c' if $names_a{$f}->{size} ne $names_b{$f}->{size} or
+	    compare ($start_dir_a .'/' . $f, $start_dir_b . '/' . $f);
+	}
 
-      Result_List::add ($f, $names_a{$f}, $names_b{$f}, $diff) if $diff;
+	! $diff and $show_all and  $diff = '=';
+
+	Result_List::add ($f, $names_a{$f}, $names_b{$f}, $diff) if $diff;
+      }
     }
     progress_next ();
   }
@@ -1301,7 +1399,7 @@ sub start_compare {
 
 sub on_exit {
   $break_oper = 1;
-  #gui_upd ();
+  gui_upd ();
   Gtk2->main_quit;
 }
 
@@ -1653,6 +1751,7 @@ END_ICON
                  'Disconnect'            => {ru => 'Отключиться'},
                  'Not connected'         => {ru => 'Не подключено'},
 		 'Clear ignore list'     => {ru => 'Очистить игнорируемые'},
+		 'show dirs'             => {ru => 'показать директории'}
 		);
 
   %help_text = (en => [
