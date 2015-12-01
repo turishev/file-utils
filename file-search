@@ -1043,6 +1043,15 @@ sub home {
   return $str;
 }
 
+# замена ./ текущим  каталогом
+sub pwd {
+  my $str = shift;
+  if ($str =~ /^\.\//) {
+    $str =~ s/^\./decode ('utf-8', $ENV{PWD})/e;
+  }
+  return $str;
+}
+
 # замена переменной окружения $XXX её значением
 sub envar {
   my $str = shift;
@@ -1723,10 +1732,11 @@ sub new {
 
   my $label = Gtk2::Label->new (::text ('depth') . ':');
   $hbox -> pack_start ($label, FALSE, FALSE, 0);
-  my $entry = Gtk2::Entry->new;
-  $hbox -> pack_start ($entry, FALSE, FALSE, 0);
-  $entry->set_size_request (32);
-  $self->{depth_entry} = $entry;
+
+  my $depth_sp = Gtk2::SpinButton->new (Gtk2::Adjustment->new(0,0,100,1,0,0),0,0);
+  $hbox -> pack_start ($depth_sp, FALSE, FALSE, 0);
+  $depth_sp->set_size_request (48);
+  $self->{depth} = $depth_sp;
 
   return  $self;
 }
@@ -1757,7 +1767,10 @@ sub dialog_run {
 
 sub get {
   my $self = shift;
-  return $self->child->get_text;
+  my $path = ::envar (::pwd (::home (::rm_sp ($self->child->get_text))));
+  $path =~ s/\/$//;
+  set ($self, $path);
+  return $path;
 }
 
 sub set {
@@ -1767,7 +1780,7 @@ sub set {
 
 sub get_depth {
   my $self = shift;
-  return $self->{depth_entry}->get_text;
+  return $self->{depth}->get_value;
 }
 
 sub box {
