@@ -704,7 +704,7 @@ sub create_window {
   $hbox -> pack_start ($lb, FALSE, FALSE, 0);
   $depth_sp = Gtk2::SpinButton->new (Gtk2::Adjustment->new(0,0,100,1,0,0),0,0);
   $hbox -> pack_start ($depth_sp, FALSE, FALSE, 0);
- # $depth_entr->set_size_request (32);
+  $depth_sp->set_size_request (48);
 
   $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
 
@@ -782,8 +782,7 @@ sub create_window {
 
 
   $butt = Gtk2::Button->new (text ('Help'));
-#  $butt->signal_connect (clicked => \&show_help, $window);
-  $butt->signal_connect (clicked => \&start_worker, $window);
+  $butt->signal_connect (clicked => \&show_help, $window);
   $hbox->pack_start ($butt, TRUE, TRUE, 0);
 
   $butt =  Gtk2::Button->new (text ('Exit'));
@@ -1399,7 +1398,6 @@ sub start_compare {
 
 sub on_exit {
   $break_oper = 1;
-  gui_upd ();
   Gtk2->main_quit;
 }
 
