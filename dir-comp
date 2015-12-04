@@ -23,13 +23,15 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
   use File::Basename;
 
   my @clmns =
-    ({id=>'type',    caption=> '',              type=>'text', align=> 0},
+    ({id=>'mark',    caption=> '',              type=>'text', align=> 0},
      {id=>'name',    caption=>::text ('name'),  type=>'text', align=> 0},
      {id=>'diff',    caption=>::text ('diff'),  type=>'text', align=> 0.5},
      {id=>'a_cp',    caption=>'A->B',  type=>'bool', align=> 0.5},
      {id=>'a_del',   caption=>'del A', type=>'bool', align=> 0.5},
      {id=>'b_cp',    caption=>'B->A',  type=>'bool', align=> 0.5},
      {id=>'b_del',   caption=>'del B', type=>'bool', align=> 0.5},
+     {id=>'type_a',   caption=>'type A', type=>'text', align=> 0},
+     {id=>'type_b',   caption=>'type B', type=>'text', align=> 0},
      {id=>'size_a',  caption=>::text ('size A'),type=>'text', align=> 1},
      {id=>'size_b',  caption=>::text ('size B'),type=>'text', align=> 1},
      {id=>'time_a',  caption=>::text ('time A'),type=>'text', align=> 0},
@@ -91,8 +93,7 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 			    # not propogate event in list
 			  } else {
 			    FALSE;
-			  }
-			  ;});
+			  }});
 
   # restore selection after check box clicked 
   sub sel_change_hnd {
@@ -166,10 +167,9 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     }
   }
 
-  sub file_type {
+  sub mark {
     my $i = shift;
-    my $type = $list->{data}->[$i]->[$clm{type}];
-    return ($type || 'f');
+    return $list->{data}->[$i]->[$clm{mark}];
   }
 
   sub validate_sel {
@@ -177,8 +177,8 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     my $type;
 
     for my $i (@{$sel}) {
-      $type = file_type ($i) if not $type;
-      return 'E' if file_file ($i) ne $type;
+      $m = mark ($i) if not $type;
+      return 'E' if mark ($i) ne $m;
       # нельзя смешивать файлы и директории
     }
     return $type;
@@ -210,7 +210,7 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 
       if ($sel_type eq 'E') {
 	$list->{data}->[$row]->[$col] = ! $val;
-	::show_msg ('error', ::text ('files and dirs mix not allowed'));
+	::show_msg ('error', ::text ('file-types mix not allowed'));
 	return;
       }
 
@@ -225,10 +225,10 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 	}
       }
 
-      uncheck_dis_dir_files (\@save_selection, $val) if $sel_type eq 'd';
+      uncheck_dis_dir_files (\@save_selection, $val) if $sel_type eq 'D';
     } else {
       @save_selection = ();	# delete selection
-      uncheck_dis_dir_files ([$row], $val) if dir_or_file ($row) eq 'd';
+      uncheck_dis_dir_files ([$row], $val) if mark ($row) eq 'D';
     }
   }
 
@@ -244,20 +244,24 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     $name =~ s/^\///;
 
     my @data;
-
-    my $type;
+    my $mark;
 
     if ($diff eq 'X') {
-      $type = 'X';
+      $mark = 'X';
     }
     elsif ($diff eq 'B') {
-      $type = $info_b->{type};
+      $mark = $info_b->{type};
     }
     else {
-      $type = $info_a->{type};
+      $mark = $info_a->{type};
     }
+    $mark = '*' if $mark ~~ ['char', 'link', 'pipe', 'sock', 'block'];
+    $mark = '' if $mark eq 'file';
+    $mark = 'D' if $mark eq 'dir';
+
     my $flags = '';
-    if ($diff eq 'X' or $type ne 'd' and  $type ne 'f') {
+    if ($diff eq 'X' or $mark eq '*') {
+      # не показывать чекбоксы для специальных файлов и разнотипных
       $flags = '000';
     } else {
       $flags .= ($diff eq 'B' ?'0':'1'); # enable copy from A/del A
@@ -265,9 +269,11 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
       $flags .= '1';
     }
 
-    $data[$clm{type}] = ($type eq 'f'? '':$type);
-    $data[$clm{name}]    = $name . ($data[$clm{type}] eq 'd' ?'/':'');
+    $data[$clm{mark}]    = $mark;
+    $data[$clm{name}]    = $name . ($data[$clm{mark}] eq 'D' ?'/':'');
     $data[$clm{diff}]    = $diff;
+    $data[$clm{type_a}]  = $info_a->{type};
+    $data[$clm{type_b}]  = $info_b->{type};
     $data[$clm{size_a}]  = $info_a->{size};
     $data[$clm{size_b}]  = $info_b->{size};
     $data[$clm{time_a}]  = $info_a->{mtime};
@@ -398,13 +404,14 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
   }
 
   sub delete_path_match {
-    my $path = shift;
+    my ($path, $is_dir) = @_;
+
     my $model = $list->get_model;
     my $iter = $model->get_iter_first;
 
     while (defined $iter) {
       my $name = $model->get_value ($iter, $clm{name});
-      my $p = substr $name, 0, length $path;
+      my $p = ($is_dir ? substr ($name, 0, length $path) : $name);
 
       if ($p eq $path) {
 	#print "ig:$name\n";
@@ -756,7 +763,7 @@ $threads::shared::clone_warn = 1;
 use Glib qw /TRUE FALSE/;
 use Gtk2 '-init';
 
-my ($start_dir_a, $start_dir_b, %comp_opt,  @ignore_list);
+my ($start_dir_a, $start_dir_b, %comp_opt,  @ignored_files, @ignored_dirs);
 my ($icon_data, $lang, %local_text, %help_text);
 
 my $dir_box_a;
@@ -862,24 +869,28 @@ sub create_window {
 			   {caption=> 'Open B',
 			    handler => sub {open_handler('b')},
 			    opt => 2},
-			   {
-			    caption=>'---'},
+			   {caption=>'---'},
 			   {caption=>'Open A with ..',
 			    handler => sub {open_with_dlg ('a')},
 			    opt => 1},
 			   {caption=>'Open B with ..',
 			    handler => sub {open_with_dlg ('b')},
 			    opt => 2},
-			   {
-			    caption=>'---'},
+			   {caption=>'---'},
 			   {caption=>'Copy A to clipboard',
 			    handler => sub {clipboard_copy('a')},
 			    opt => 1},
 			   {caption=>'Copy B to clipboard',
 			    handler => sub {clipboard_copy('b')},
 			    opt => 2},
-			   {
-			    caption=>'---'},
+			   {caption=>'---'},
+			   {caption=>'Rename A',
+			    handler => sub {rename_dlg('a')},
+			    opt => 1},
+			   {caption=>'Rename B',
+			    handler => sub {rename_dlg('b')},
+			    opt => 2},
+			   {caption=>'---'},
 			   {caption=>'diff A and B',
 			    handler => \&diff_files,
 			    opt => 1 | 2 | 4},
@@ -913,7 +924,7 @@ sub create_window {
 
 
   $butt = Gtk2::Button->new (text ('Clear hidden list'));
-  $butt->signal_connect (clicked => sub {@ignore_list = ();},
+  $butt->signal_connect (clicked => sub {@ignored_dirs = ();@ignored_files = ()},
 			 $window);
   $hbox->pack_start ($butt, TRUE, TRUE, 0);
 
@@ -1130,7 +1141,7 @@ sub start_operation {
     my $path_b =  $start_dir_b . '/' . $row{name};
 
     my ($oper, $src, $dst);
-    my $type = ($row{type} eq 'd'? 'd':'f');
+    my $type = ($row{mark} eq 'D'? 'd':'f');
 
     if (! $row{a_cp} and ! $row{b_cp}) {
       # удалять можно оба сразу!
@@ -1223,6 +1234,92 @@ sub open_with_dlg {
   open_with ($letter, @cmd) if $response eq 'ok';
 }
 
+sub rename_dlg {
+  my $letter = shift;
+
+  my $dialog = Gtk2::Dialog->new (text ("Rename") . uc ($letter),
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-cancel' => 'cancel',
+				  'gtk-ok'     => 'ok');
+
+  my $dir = ($letter eq 'a' ? $start_dir_a : $start_dir_b);
+  my $inx =  Result_List::selected_inx_0;
+  my $old_name = Result_List::name($inx);
+  my $is_dir = Result_List::mark($inx) eq 'D';
+  my $old_path = $dir . '/'. $old_name;
+
+  my $entr = Gtk2::Entry->new;
+  $entr->set_width_chars (70);
+  $dialog->vbox->add ($entr);
+
+  my @fn = split '/', $old_name;
+  $entr->set_text ($fn[-1]);
+  $dialog->set_default_response ('cancel');
+  $dialog->show_all;
+  my $response = $dialog->run;
+
+  if ($response eq 'ok') {
+    my $new_name = $entr->get_text ();
+    my $new_path =  $dir . '/'. $new_name;
+    print "$old_path'->'$new_path'\n";
+
+    if (dir_depth ($new_name)) {
+      show_msg ("error", ::text ("only file-name without path allowed!"));
+    }
+    elsif (-e $new_path) {
+      show_msg ("error", ::text ("file eixists:") . $new_path);
+    }
+    else {
+      #      my $res = move ($old_path, $new_path);
+      my $res = rename ($old_path, $new_path);
+
+      if ($res) {
+	re_comp_files ($old_name, $is_dir);
+	re_comp_files ($new_name, $is_dir);
+      }
+      else {
+	show_msg ("error", "rename error '$old_path'->'$new_path':".
+		  decode ('utf-8',$!));
+      }
+    }
+  }
+  $dialog->destroy;
+}
+
+sub re_comp_files {
+  my ($name, $is_dir) = @_;
+  my (@list_a, @list_b);
+
+  Result_List::delete_path_match ($name, $is_dir);
+
+  my ($path_a, $path_b) = ($start_dir_a .'/'. $name,
+			   $start_dir_b .'/'. $name);
+
+  if (-e  $path_a) {
+    if ($is_dir) {
+      create_path_list ($path_a, \@list_a, $comp_opt{search_depth}) ;
+      map {$_ = $name . '/' . $_} @list_a;
+      push @list_a, $name if $comp_opt{show_dirs};# после предыдущего!
+    } else {
+      push @list_a, $name if -e  $path_a;
+    }
+  }
+  if (-e  $path_b) {
+    if ($is_dir) {
+      create_path_list ($path_b, \@list_b, $comp_opt{search_depth});
+      map {$_ = $name . '/' . $_} @list_a;
+      push @list_a, $name if $comp_opt{show_dirs};
+    } else {
+      push @list_b, $name if -e  $path_b;
+    }
+  }
+  #print "A:@list_a\n";
+  #print "B:@list_b\n";
+
+  comp_path_lists (\@list_a, \@list_b);
+}
+
 sub diff_files {
   my %row = Result_List::row (Result_List::selected_inx_0());
 
@@ -1239,7 +1336,7 @@ sub diff_files {
   $out .= $_ while <$fh>;
   close $fh;
   $out ? show_text ($out, "diff:$row{name}")
-    : show_msg ('info', text ('no differece found'));
+    : show_msg ('info', text ('no difference found'));
 }
 
 sub select_files_in_dir_dlg {
@@ -1268,7 +1365,7 @@ sub select_files_in_dir_dlg {
 
   my $pp = '';
   for my $p (@path) {
-    $pp .= ($pp ? '/':'') . $p;
+    $pp .= $p . '/';
     $dir_entr->prepend_text ($pp);
   }
   $dir_entr->set_active (0);
@@ -1333,6 +1430,7 @@ sub select_files_in_dir_dlg {
 
 sub ignore_path_dlg {
   my $file = Result_List::selected_name ();
+  my $is_dir = is_dir_name ($file);
 
   my @path = split '/', $file;
 
@@ -1352,8 +1450,9 @@ sub ignore_path_dlg {
   $mainbox->pack_start ($hbox, FALSE, FALSE, 0);
 
   my $pp = '';
-  for my $p (@path) {
-    $pp .= ($pp ? '/':'') . $p;
+  for (my $i = 0; $i <= $#path; $i++) {
+    $pp .= $path[$i];
+    $pp .= '/' if $i < $#path or $is_dir;
     $dir_entr->prepend_text ($pp);
   }
   $dir_entr->set_active (0);
@@ -1365,9 +1464,12 @@ sub ignore_path_dlg {
 
   if ($response eq 'ok') {
     my $path =  $dir_entr->get_active_text;
+    $is_dir = substr ($path, -1, 1) eq '/';
+
     #print "ignore:$path\n";
-    Result_List::delete_path_match ($path);
-    push @ignore_list, $path;
+    Result_List::delete_path_match ($path, $is_dir);
+    if ($is_dir) {push @ignored_dirs, $path}
+    else {push @ignored_files, $path}
   }
 }
 
@@ -1380,15 +1482,22 @@ sub gui_upd {
 
 sub ignored {
   my $path = shift;
-  for my $p (@ignore_list) {
-    return 1 if (substr $path, 1, length $p) eq $p;
-    # индекс с 1 потому что нулевой символ $path - /, его нет в @ignore_list
+  for my $p (@ignored_dirs) {
+    # последний символ в имени директории $p='/'
+    # тут два случая 1) частичное совпадение 
+    # с началом в пути к файлу
+    return 1 if (substr $path, 0, length $p) eq $p;
+    # 2)полное совпадение имени директории ($path не содержит '/' на конце)
+    return 1 if $path eq (substr $p, 0, length ($p) - 1);
+  }
+  for my $p (@ignored_files) {
+    return 1 if $path  eq $p;
   }
   return 0;
 }
 
 sub create_path_list {
-  my ($start_dir, $res, $show_dirs, $depth) = @_;
+  my ($start_dir, $res, $depth) = @_;
   eval {
     my $cnt = 0;
     find ({preprocess => ($depth?
@@ -1396,18 +1505,17 @@ sub create_path_list {
                                #print "$File::Find::dir, d:$dep\n";
                                if ($dep <= $depth + dir_depth ($start_dir) - 1) {
 				 return @_;
-			       }
-			       ;
+			       };
 			       return;
 			     } : undef),
 	   wanted => sub {
 	     die if $break_oper;
 	     return if /^\.\.?$/;
 	     my $path = decode ('utf8', $File::Find::name);
-	     my $p = substr $path, length $start_dir;
-
+	     my $p = substr $path, (length $start_dir) + 1;
+	     # удаляем вместе с /
 	     if (! ignored ($p)) {
-	       push @$res, $p;
+	       push @$res,  $p;
 	     }
 
 	     gui_upd (), $cnt = 0 if $cnt++ >= 20;
@@ -1451,10 +1559,14 @@ sub start_compare {
 
   my (@names_a, @names_b);
 
+  #print "$start_dir_a,$start_dir_b\n";
   progress_start (0, text ('get file-list') . ' A');
   create_path_list ($start_dir_a, \@names_a, $comp_opt{search_depth});
   progress_reset (0, text ('get file-list') . ' B');
   create_path_list ($start_dir_b, \@names_b, $comp_opt{search_depth});
+
+  #print "A:@names_a\n";
+  #print "B:@names_b\n";
 
   progress_reset (0, text ('compare dirs'));
 
@@ -1494,10 +1606,11 @@ sub comp_path_lists {
   for my $n (@$base_list) {
     my $base_path = $base_dir .'/' . $n;
     %base_parm = get_file_info ($base_path);
+    %other_parm = ();
 
     if (! exists $others_names{$n}) {# файл есть только в base_dir
       Result_List::add ($n, $parm_a, $parm_b, $base_letter)
-	  if $base_parm{type} ne 'd' or $comp_opt{show_dirs};
+	  if $base_parm{type} ne 'dir' or $comp_opt{show_dirs};
     } else {
       delete $others_names{$n};
 
@@ -1508,7 +1621,7 @@ sub comp_path_lists {
 	Result_List::add ($n, $parm_a, $parm_b, 'X');
 	# разнотипные файлы (директории) - синхронизация невозможна
       }
-      elsif ($base_parm{type} eq 'd') {
+      elsif ($base_parm{type} eq 'dir') {
 	Result_List::add ($n, $parm_a, $parm_b, 'AB')
 	    if $comp_opt{show_all} and $comp_opt{show_dirs};
 	# не выполняем никаких проверок для катологов - просто добавляем
@@ -1530,7 +1643,7 @@ sub comp_path_lists {
 	Result_List::add ($n, $parm_a, $parm_b, $diff) if $diff;
       }
     }
-    &$iter_callback;
+    &$iter_callback if defined $iter_callback;
   }
 
   if ($comp_opt{mode} eq 'ab') {
@@ -1538,9 +1651,9 @@ sub comp_path_lists {
       my $other_path = $other_dir .'/' . $n;
       %other_parm = get_file_info ($other_path);
       %base_parm = ();
-      Result_List::add ($n, $parm_a, $parm_b, $other_letter);
-
-      &$iter_callback;
+      Result_List::add ($n, $parm_a, $parm_b, $other_letter)
+	  if $other_parm{type} ne 'dir' or $comp_opt{show_dirs};
+      &$iter_callback if defined $iter_callback;
     }
   }
 }
@@ -1556,13 +1669,12 @@ sub menu_popup {
   my @sel = Result_List::selected_inx();
 
   if ($#sel == 0 and $event->button == 3) { # только для одной строчки
-    my $ftype = Result_List::file_type ($sel[0]);
+    my $fmark = Result_List::mark ($sel[0]);
 
-    return if ($ftype ne 'd' and $ftype ne 'f');
+    return if ($fmark eq '*');
     # для специальных файлов меню не показываем
 
     my $dtype = Result_List::diff_type ($sel[0]);
-    my $is_dir = ($ftype eq 'd');
     my $patt = 0;
 
     if ($dtype eq 'A') {
@@ -1572,7 +1684,7 @@ sub menu_popup {
     } else {
       $patt |= 3;
     };
-    $patt |= 4 if not  $ftype eq 'd';
+    $patt |= 4 if not $fmark eq 'D';
 
     Menu::show ($menu, sub {my $opt = shift; return ($patt & $opt) == $opt});
   }
@@ -1613,6 +1725,10 @@ sub get_file_info {
   #              11 blksize  preferred block size for file system I/O
   #              12 blocks   actual number of blocks allocated
 
+  if (not @par) {
+    print STDERR "get_file_info:file not exists? '$name'\n";
+    return;
+  }
   my $type = file_type_format ($par[2]);
   my $info;
   if ($type eq 'l') {
@@ -1656,13 +1772,13 @@ sub num_format {
 sub file_type_format {
   my $tp = shift;
   $tp >>= 12;
-  my %type_sym = (8  => 'f',
-                  4  => 'd',
-                  10 => 'l',
-                  12 => 's',
-                  1  => 'p',
-                  2  => 'c',
-                  6  => 'b');
+  my %type_sym = (8  => 'file',
+                  4  => 'dir',
+                  10 => 'link',
+                  12 => 'sock',
+                  1  => 'pipe',
+                  2  => 'char',
+                  6  => 'block');
 
   return $type_sym {$tp};
 }
