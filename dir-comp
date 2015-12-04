@@ -23,7 +23,7 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
   use File::Basename;
 
   my @clmns =
-    ({id=>'type',    caption=>::text ('T'),  type=>'text', align=> 0},
+    ({id=>'type',    caption=> '',              type=>'text', align=> 0},
      {id=>'name',    caption=>::text ('name'),  type=>'text', align=> 0},
      {id=>'diff',    caption=>::text ('diff'),  type=>'text', align=> 0.5},
      {id=>'a_cp',    caption=>'A->B',  type=>'bool', align=> 0.5},
@@ -38,7 +38,7 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
      {id=>'perm_b',  caption=>::text ('perm B'),type=>'text', align=> 0},
      {id=>'owner_a', caption=>::text ('own A'), type=>'text', align=> 0},
      {id=>'owner_b', caption=>::text ('own B'), type=>'text', align=> 0},
-#     {id=>'flags',   caption=>'flags',          type=>'text', align=> 0});
+#    {id=>'flags',   caption=>'flags',          type=>'text', align=> 0});
      {id=>'flags',   caption=>'flags',          type=>'hidden', align=> 0});
 
   my %clm;			# index columns numbers on id
@@ -108,17 +108,17 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     my $col_index = $renderer->{column_index};
     my $id = $clmns[$col_index]{id};
     my $dtype  = ($model->get ($iter))[$clm{diff}];
+    my $flags = $model->get_value ($iter, $clm{flags});
 
-    if ($dtype eq 'A' and ($id eq 'b_del' or $id eq 'b_cp')
-	or $dtype eq 'B' and ($id eq 'a_del' or $id eq 'a_cp')) {
-      $renderer->set('visible', FALSE);
-    } else {
+    if (is_cell_visb ($col_index, $flags)) {
       $renderer->set('visible', TRUE);
+    } else {
+      $renderer->set('visible', FALSE);
     }
 
     $renderer->set('sensitive' , FALSE);
 
-    if (! is_sensitive ($model->get_value ($iter, $clm{flags})) ) {
+    if (! is_sensitive ($flags) ) {
       $renderer->set('sensitive' , FALSE);
       $renderer->set('activatable', FALSE);
     } else {
@@ -166,21 +166,19 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     }
   }
 
-  sub dir_or_file {
+  sub file_type {
     my $i = shift;
-    return 'D' if $list->{data}->[$i]->[$clm{type}] eq 'D';
-    return 'F';
+    my $type = $list->{data}->[$i]->[$clm{type}];
+    return ($type || 'f');
   }
 
   sub validate_sel {
     my $sel = shift;
-    #print "validate sel\n";
-
     my $type;
 
     for my $i (@{$sel}) {
-      $type = dir_or_file ($i) if not $type;
-      return 'E' if dir_or_file ($i) ne $type;
+      $type = file_type ($i) if not $type;
+      return 'E' if file_file ($i) ne $type;
       # нельзя смешивать файлы и директории
     }
     return $type;
@@ -227,10 +225,10 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 	}
       }
 
-      uncheck_dis_dir_files (\@save_selection, $val) if $sel_type eq 'D';
+      uncheck_dis_dir_files (\@save_selection, $val) if $sel_type eq 'd';
     } else {
       @save_selection = ();	# delete selection
-      uncheck_dis_dir_files ([$row], $val) if dir_or_file ($row) eq 'D';
+      uncheck_dis_dir_files ([$row], $val) if dir_or_file ($row) eq 'd';
     }
   }
 
@@ -246,9 +244,29 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     $name =~ s/^\///;
 
     my @data;
-    $data[$clm{type}]    = (($info_a->{type} eq 'dir'
-			    or $info_b->{type} eq 'dir') ? 'D': '');
-    $data[$clm{name}]    = $name;
+
+    my $type;
+
+    if ($diff eq 'X') {
+      $type = 'X';
+    }
+    elsif ($diff eq 'B') {
+      $type = $info_b->{type};
+    }
+    else {
+      $type = $info_a->{type};
+    }
+    my $flags = '';
+    if ($diff eq 'X' or $type ne 'd' and  $type ne 'f') {
+      $flags = '000';
+    } else {
+      $flags .= ($diff eq 'B' ?'0':'1'); # enable copy from A/del A
+      $flags .= ($diff eq 'A' ?'0':'1'); # enable copy from B/del B
+      $flags .= '1';
+    }
+
+    $data[$clm{type}] = ($type eq 'f'? '':$type);
+    $data[$clm{name}]    = $name . ($data[$clm{type}] eq 'd' ?'/':'');
     $data[$clm{diff}]    = $diff;
     $data[$clm{size_a}]  = $info_a->{size};
     $data[$clm{size_b}]  = $info_b->{size};
@@ -262,24 +280,18 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     $data[$clm{b_del}]   = FALSE;
     $data[$clm{a_cp}]    = FALSE;
     $data[$clm{b_cp}]    = FALSE;
-    $data[$clm{flags}] = create_flags ($diff);
+    $data[$clm{flags}] = $flags;
 
     push @{$list->{data}}, [@data];
   }
 
-  sub create_flags {
-    my $diff = shift;
-    my $flags = '';
-
-    $flags .= ($diff eq 'B' ?'0':'1'); # enable copy from A/del A
-    $flags .= ($diff eq 'A' ?'0':'1'); # enable copy from B/del B
-    $flags .= '1';
-    return $flags;
-  }
-
   sub is_cell_visible {
     my ($row, $col) = @_;
-    my $flags = $list->{data}->[$row]->[$clm{flags}];
+    return is_cell_visb ($col, $list->{data}->[$row]->[$clm{flags}]);
+  }
+
+  sub is_cell_visb {
+    my ($col, $flags) = @_;
     if ($col == $clm{a_cp} or $col == $clm{a_del}) {
       return substr $flags, 0, 1;
     }
@@ -303,7 +315,7 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
     my $flags = shift;
     return substr $flags,2,1;
   }
-
+ 
   sub get_oper_inx_list {
     my $result = shift;
     my $l = $list->{data};
@@ -744,7 +756,7 @@ $threads::shared::clone_warn = 1;
 use Glib qw /TRUE FALSE/;
 use Gtk2 '-init';
 
-my ($start_dir_a, $start_dir_b, @ignore_list);
+my ($start_dir_a, $start_dir_b, %comp_opt,  @ignore_list);
 my ($icon_data, $lang, %local_text, %help_text);
 
 my $dir_box_a;
@@ -1118,7 +1130,7 @@ sub start_operation {
     my $path_b =  $start_dir_b . '/' . $row{name};
 
     my ($oper, $src, $dst);
-    my $type = ($row{type} eq 'D'? 'd':'f');
+    my $type = ($row{type} eq 'd'? 'd':'f');
 
     if (! $row{a_cp} and ! $row{b_cp}) {
       # удалять можно оба сразу!
@@ -1395,9 +1407,7 @@ sub create_path_list {
 	     my $p = substr $path, length $start_dir;
 
 	     if (! ignored ($p)) {
-	       my %attr = get_file_info ($path);
-	       $res->{$p} = {%attr} if $attr{type} eq 'file';
-	       $res->{$p . '/'} = {%attr} if $show_dirs and $attr{type} eq 'dir';
+	       push @$res, $p;
 	     }
 
 	     gui_upd (), $cnt = 0 if $cnt++ >= 20;
@@ -1424,12 +1434,14 @@ sub dir_depth {
 }
 
 sub start_compare {
-  my $check_date = $chk_date->get_active;
-  my $check_content  = $chk_content->get_active;
-  my $check_size = $chk_size->get_active;
-  my $show_all = $chk_show_all->get_active;
-  my $show_dirs = $chk_show_dirs->get_active; #global var
-  my $search_depth = $depth_sp->get_value;
+  #global var %comp_opt
+  $comp_opt{check_date} = $chk_date->get_active;
+  $comp_opt{check_content}  = $chk_content->get_active;
+  $comp_opt{check_size} = $chk_size->get_active;
+  $comp_opt{show_all} = $chk_show_all->get_active;
+  $comp_opt{show_dirs} = $chk_show_dirs->get_active; 
+  $comp_opt{search_depth} = $depth_sp->get_value;
+  $comp_opt{mode} = $mode_box->get;
 
   ($start_dir_a, $start_dir_b) = ($dir_box_a->get, $dir_box_b->get);
 
@@ -1437,76 +1449,100 @@ sub start_compare {
 
   $start_dir_a ne $start_dir_b || return;
 
-  my $comp_mode = $mode_box->get;
-
-  my (%names_a, %names_b);
+  my (@names_a, @names_b);
 
   progress_start (0, text ('get file-list') . ' A');
-  create_path_list ($start_dir_a, \%names_a, $show_dirs, $search_depth);
+  create_path_list ($start_dir_a, \@names_a, $comp_opt{search_depth});
   progress_reset (0, text ('get file-list') . ' B');
-  create_path_list ($start_dir_b, \%names_b, $show_dirs, $search_depth);
+  create_path_list ($start_dir_b, \@names_b, $comp_opt{search_depth});
 
   progress_reset (0, text ('compare dirs'));
-  # print "LIST A:\n";
-  # map {print encode ('utf-8',$_),"\n"} sort keys %names_a;
-  # print "LIST B:\n";
-  # map {print encode ('utf-8',$_),"\n"} sort keys %names_b;
 
-  my ($base_list, $other_list, $base_letter, $other_letter);
-  if ($comp_mode eq 'b') {
-    $base_list = \%names_b;
-    $other_list = \%names_a;
-    $base_letter = 'B';
-    $other_letter = 'A';
+  comp_path_lists (\@names_a, \@names_b, \&progress_next);
 
-  } else {
-    $base_list = \%names_a;
-    $other_list = \%names_b;
-    $base_letter = 'A';
-    $other_letter = 'B';
-  }
-
-  for my $f (keys %$base_list) {
-    if (! exists $other_list->{$f}) {
-      Result_List::add ($f, $base_list->{$f}, '', $base_letter);
-    } else {
-      if ($names_a{$f}->{type} eq 'dir') {
-	Result_List::add ($f, $names_a{$f}, $names_b{$f}, 'AB') if $show_all;
-	# не выполняем никаких проверок для катологов - просто добавляем
-	# если они есть в списке (в зависимости от show_dirs)
-      } else {
-	my ($diff);
-	$check_size and $names_a{$f}->{size} ne $names_b{$f}->{size} and $diff .= 's';
-	$check_date and $names_a{$f}->{mtime} ne $names_b{$f}->{mtime} and $diff .= 't';
-
-	if ($check_content) {
-	  $diff .= 'c' if $names_a{$f}->{size} ne $names_b{$f}->{size} or
-	    compare ($start_dir_a .'/' . $f, $start_dir_b . '/' . $f);
-	}
-
-	! $diff and $show_all and  $diff = '=';
-
-	Result_List::add ($f, $names_a{$f}, $names_b{$f}, $diff) if $diff;
-      }
-    }
-    progress_next ();
-  }
-
-  if ($comp_mode eq 'ab') {
-    for my $f (keys %$other_list) {
-      if (! exists $base_list->{$f}) {
-	Result_List::add ($f, '', $other_list->{$f}, $other_letter);
-      }
-      progress_next ();
-    }
-  }
-
-  progress_end ();
+  progress_end();
 
   Result_List::row_count == 0 and ! $break_oper
       and show_msg ('info', text ('No differences were found'));
 
   Result_List::clear if $break_oper;
+}
+
+sub comp_path_lists {
+  my ($names_a, $names_b, $iter_callback) = @_;
+  my ($base_list, $other_list, $base_letter, $other_letter);
+  my ($base_dir, $other_dir);
+  my (%base_parm, %other_parm, $parm_a, $parm_b);
+
+  if ($comp_opt{mode} eq 'b') {
+    ($base_list, $other_list)  = ($names_b, $names_a);
+    ($base_letter, $other_letter) = ('B', 'A');
+    ($base_dir, $other_dir)  = ($start_dir_b, $start_dir_a);
+    ($parm_b, $parm_a) = (\%base_parm, \%other_parm);
+  } else {
+    ($base_list, $other_list)  = ($names_a, $names_b);
+    ($base_letter, $other_letter) = ('A', 'B');
+    ($base_dir, $other_dir)  = ($start_dir_a, $start_dir_b);
+    ($parm_a, $parm_b) = (\%base_parm, \%other_parm);
+  }
+
+  my %others_names;
+  map {$others_names{$_} = 1} @$other_list;
+
+  #map {print "$_:$comp_opt{$_}\n"} keys %comp_opt;
+
+  for my $n (@$base_list) {
+    my $base_path = $base_dir .'/' . $n;
+    %base_parm = get_file_info ($base_path);
+
+    if (! exists $others_names{$n}) {# файл есть только в base_dir
+      Result_List::add ($n, $parm_a, $parm_b, $base_letter)
+	  if $base_parm{type} ne 'd' or $comp_opt{show_dirs};
+    } else {
+      delete $others_names{$n};
+
+      my $other_path = $other_dir .'/' . $n;
+      %other_parm = get_file_info ($other_path);
+
+      if ($base_parm{type} ne $other_parm{type}) {
+	Result_List::add ($n, $parm_a, $parm_b, 'X');
+	# разнотипные файлы (директории) - синхронизация невозможна
+      }
+      elsif ($base_parm{type} eq 'd') {
+	Result_List::add ($n, $parm_a, $parm_b, 'AB')
+	    if $comp_opt{show_all} and $comp_opt{show_dirs};
+	# не выполняем никаких проверок для катологов - просто добавляем
+	# если они есть в списке (в зависимости от show_all)
+      } else {
+	my ($diff);
+	$comp_opt{check_size} and $base_parm{size} ne $other_parm{size}
+	  and $diff .= 's';
+	$comp_opt{check_date} and $base_parm{mtime} ne $other_parm{mtime}
+	  and $diff .= 't';
+
+	if ($comp_opt{check_content}) {
+	  $diff .= 'c' if $base_parm{size} ne $other_parm{size} or
+	    compare ($base_path, $other_path);
+	}
+
+	! $diff and $comp_opt{show_all} and  $diff = '=';
+
+	Result_List::add ($n, $parm_a, $parm_b, $diff) if $diff;
+      }
+    }
+    &$iter_callback;
+  }
+
+  if ($comp_opt{mode} eq 'ab') {
+    for my $n (keys %others_names) {
+      my $other_path = $other_dir .'/' . $n;
+      %other_parm = get_file_info ($other_path);
+      %base_parm = ();
+      Result_List::add ($n, $parm_a, $parm_b, $other_letter);
+
+      &$iter_callback;
+    }
+  }
 }
 
 sub on_exit {
@@ -1520,9 +1556,13 @@ sub menu_popup {
   my @sel = Result_List::selected_inx();
 
   if ($#sel == 0 and $event->button == 3) { # только для одной строчки
+    my $ftype = Result_List::file_type ($sel[0]);
+
+    return if ($ftype ne 'd' and $ftype ne 'f');
+    # для специальных файлов меню не показываем
 
     my $dtype = Result_List::diff_type ($sel[0]);
-    my $is_dir = (Result_List::dir_or_file ($sel[0]) eq 'D');
+    my $is_dir = ($ftype eq 'd');
     my $patt = 0;
 
     if ($dtype eq 'A') {
@@ -1532,7 +1572,7 @@ sub menu_popup {
     } else {
       $patt |= 3;
     };
-    $patt |= 4 if ! $is_dir;
+    $patt |= 4 if not  $ftype eq 'd';
 
     Menu::show ($menu, sub {my $opt = shift; return ($patt & $opt) == $opt});
   }
@@ -1616,13 +1656,13 @@ sub num_format {
 sub file_type_format {
   my $tp = shift;
   $tp >>= 12;
-  my %type_sym = (8  => 'file',
-                  4  => 'dir',
-                  10 => 'link',
-                  12 => 'sock',
-                  1  => 'pipe',
-                  2  => 'char',
-                  6  => 'block');
+  my %type_sym = (8  => 'f',
+                  4  => 'd',
+                  10 => 'l',
+                  12 => 's',
+                  1  => 'p',
+                  2  => 'c',
+                  6  => 'b');
 
   return $type_sym {$tp};
 }
