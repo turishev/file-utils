@@ -1264,7 +1264,7 @@ sub rename_dlg {
     my $new_path =  $dir . '/'. $new_name;
     print "$old_path'->'$new_path'\n";
 
-    if (dir_depth ($new_name)) {
+    if (dir_depth ($new_name) > 1) {
       show_msg ("error", ::text ("only file-name without path allowed!"));
     }
     elsif (-e $new_path) {
@@ -1295,20 +1295,28 @@ sub re_comp_files {
 
   my ($path_a, $path_b) = ($start_dir_a .'/'. $name,
 			   $start_dir_b .'/'. $name);
-
+  my $depth;
+  if ($is_dir and $comp_opt{search_depth}) {
+    $depth = $comp_opt{search_depth} - dir_depth ($name);
+  }
+  #print "re_comp_files:$path_a, $path_b, $depth\n";
   if (-e  $path_a) {
     if ($is_dir) {
-      create_path_list ($path_a, \@list_a, $comp_opt{search_depth}) ;
-      map {$_ = $name . '/' . $_} @list_a;
-      push @list_a, $name if $comp_opt{show_dirs};# после предыдущего!
+      if ($depth) {
+	create_path_list ($path_a, \@list_a, $depth);
+	map {$_ = $name . '/' . $_} @list_a;
+      }
+      push @list_a, $name if $comp_opt{show_dirs}; # после предыдущего!
     } else {
       push @list_a, $name if -e  $path_a;
     }
   }
   if (-e  $path_b) {
     if ($is_dir) {
-      create_path_list ($path_b, \@list_b, $comp_opt{search_depth});
-      map {$_ = $name . '/' . $_} @list_a;
+      if ($depth) {
+	create_path_list ($path_b, \@list_b, $depth);
+	map {$_ = $name . '/' . $_} @list_a;
+      }
       push @list_a, $name if $comp_opt{show_dirs};
     } else {
       push @list_b, $name if -e  $path_b;
@@ -1498,12 +1506,13 @@ sub ignored {
 
 sub create_path_list {
   my ($start_dir, $res, $depth) = @_;
+  my $d = $depth + dir_depth ($start_dir) - 1 if $depth;
   eval {
     my $cnt = 0;
     find ({preprocess => ($depth?
 			  sub {my $dep = dir_depth ($File::Find::dir);
                                #print "$File::Find::dir, d:$dep\n";
-                               if ($dep <= $depth + dir_depth ($start_dir) - 1) {
+                               if ($dep <= $d) {
 				 return @_;
 			       };
 			       return;
@@ -1538,7 +1547,14 @@ sub comp_content {
 }
 
 sub dir_depth {
-  return $_[0] =~ tr[/][];
+  my $s = shift;
+  my $res = 0;
+  $res = 1 if substr ($s, 0, 1) ne '/';
+  $res-- if substr ($s, -1, 1) eq '/';
+  my $d = $s =~ tr[/][];
+  $res += $d;
+  #print "dir_depth:$s,$res\n";
+  return $res;
 }
 
 sub start_compare {
