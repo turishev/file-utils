@@ -1197,13 +1197,16 @@ sub new {
 
  for (my $i = 0; $i < $#desc/2; $i++) {
    my $clm = $list -> get_column ($i);
-   ($clm -> get_cell_renderers())[0] ->set('xalign', $align[$i]);
-    $clm->set_clickable(TRUE);
-    $clm->set_resizable(TRUE);
-    $clm->set_sort_column_id($i);
+   my $r = $clm->get_cell_renderers;
+  # ($clm -> get_cell_renderers())[0] ->set('xalign', $align[$i]);
+   $r->set('xalign', $align[$i]);
+   $clm->set_clickable(TRUE);
+   $clm->set_resizable(TRUE);
+   $clm->set_sort_column_id($i);
+   $clm->set_cell_data_func ($r, \&col_randr_func);
  }
  $list->get_selection->set_mode ('multiple');
- $list->get_model->set_sort_func(3, \&File_List::sort_int, 3);# sort size
+ $list->get_model->set_sort_func(3, \&File_List::sort_int, 3); # sort size
 
  my $scroll = Gtk2::ScrolledWindow->new;
  $scroll -> set_policy ('automatic', 'automatic');
@@ -1212,6 +1215,18 @@ sub new {
  $self->{box} = $scroll;
  return  $self;
 }
+
+  # on any cell rendering
+sub col_randr_func {
+  my ($column, $renderer, $model, $iter) = @_;
+  my $path = $model->get_string_from_iter ($iter);
+  my $color_inx = $path % 2;
+  $renderer->set('cell-background-gdk'
+		 => Gtk2::Gdk::Color->new (0xFFFF - 0x1700 * $color_inx,
+					   0xFFFF - 0x1700 * $color_inx,
+					   0xFFFF - 0x1700 * $color_inx));
+}
+
 
 sub click_handler {
   my ($self, $handler) = @_;
