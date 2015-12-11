@@ -43,6 +43,9 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 #    {id=>'flags',   caption=>'flags',          type=>'text', align=> 0});
      {id=>'flags',   caption=>'flags',          type=>'hidden', align=> 0});
 
+  my @row_color = (Gtk2::Gdk::Color->new (0xFFFF, 0xFFFF, 0xFFFF),
+		   Gtk2::Gdk::Color->new (0xE8FF, 0xE8FF, 0xE8FF));
+
   my %clm;			# index columns numbers on id
   for (my $i = 0; $i <= $#clmns; $i++) {
     $clm{$clmns[$i]{id}} = $i;
@@ -67,12 +70,12 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 
       my $r = $clm->get_cell_renderers;
 
-
       $r->set('xalign', $clmns[$i]{align});
       if ($clmns[$i]{type} eq 'bool') {
 	$r->signal_connect ('toggled' => Result_List::check_box_hnd);
-	$clm->set_cell_data_func ($r, \&bool_randr_func, $i);
+
       }
+      $clm->set_cell_data_func ($r, \&col_randr_func);
     }
   }
 
@@ -95,37 +98,44 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 			    FALSE;
 			  }});
 
-  # restore selection after check box clicked 
+  # restore selection after check box clicked
   sub sel_change_hnd {
     #my $selection = shift;
     $list->select (@save_selection);
     @save_selection = ();
   }
 
-  # on any cell rendering
-  sub bool_randr_func {
-    my ($column, $renderer, $model, $iter, $c) = @_;
-    #print "c:$c\n";
+  # calld on any cell rendering
+  sub col_randr_func {
+    my ($column, $renderer, $model, $iter) = @_;
     my $col_index = $renderer->{column_index};
     my $id = $clmns[$col_index]{id};
-    my $dtype  = ($model->get ($iter))[$clm{diff}];
-    my $flags = $model->get_value ($iter, $clm{flags});
+    if ($clmns[$col_index]{type} eq 'bool') {
+      my $dtype  = ($model->get ($iter))[$clm{diff}];
+      my $flags = $model->get_value ($iter, $clm{flags});
 
-    if (is_cell_visb ($col_index, $flags)) {
-      $renderer->set('visible', TRUE);
-    } else {
-      $renderer->set('visible', FALSE);
-    }
+      if (is_cell_visb ($col_index, $flags)) {
+	$renderer->set('visible', TRUE);
 
-    $renderer->set('sensitive' , FALSE);
+      } else {
+	$renderer->set('visible', FALSE);
+      }
 
-    if (! is_sensitive ($flags) ) {
       $renderer->set('sensitive' , FALSE);
-      $renderer->set('activatable', FALSE);
+
+      if (! is_sensitive ($flags) ) {
+	$renderer->set('sensitive' , FALSE);
+	$renderer->set('activatable', FALSE);
+
+      } else {
+	$renderer->set('sensitive', TRUE);
+	$renderer->set('activatable', TRUE);
+      }
     } else {
-      $renderer->set('sensitive', TRUE);
-      $renderer->set('activatable', TRUE);
-    }
+      my $path = $model->get_string_from_iter ($iter);
+      my $color_inx = $path % 2;
+      $renderer->set('cell-background-gdk' => $row_color[$color_inx]);
+     }
   }
 
   sub sort_int {
