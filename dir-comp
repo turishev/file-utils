@@ -645,8 +645,7 @@ sub get {
   my $self = shift;
   return $self->{vals}[$self->{combo}->get_active];
 }
-
-# END Mode_Selector #################################################
+# END Selector #################################################
 
 
 package main;
@@ -689,8 +688,8 @@ $threads::shared::clone_warn = 1;
 
 	 lock ($start_thread);
 	 cond_wait ($start_thread);
-	 printf "start working:%d\n", $cnt++;
-	 mess ('-- START --');
+	 # printf "start working:%d\n", $cnt++;
+	 mess ('== START ==');
 	 $work_completed_flg = 0;
 	 $abort_flg = 0;
 	 $stop_on_complete_flg = 0;
@@ -705,21 +704,21 @@ $threads::shared::clone_warn = 1;
 	     }
 
 	     my $t = shift @work_queue;
-	     print "task:$t->{oper},$t->{file_type},"
-	       . encode ('utf-8',$t->{src}) .","
-	       . encode ('utf-8',$t->{dst}). "\n";
+	     # print "task:$t->{oper},$t->{file_type},"
+	     #   . encode ('utf-8',$t->{src}) .","
+	     #   . encode ('utf-8',$t->{dst}). "\n";
 
 	     if ($t->{oper} eq 'end') {
 	       last OUTER;
 	     } elsif ($t->{oper} eq 'start') {
-	       #debug only
+	       # for debug only
 	     } else {
 	       my $op_m = ($t->{oper} eq 'c'? 'copy':
 			   ($t->{oper} eq 'm'?'move':
 			    ($t->{oper} eq 'd'?'delete':'???')));
 	       mess ("$op_m '$t->{src}' -> '$t->{dst}'");
 	       my $res = oper_do ($t);
-	       mess ("** ERROR: " . $res) if $res;
+	       mess ("** ERROR: " . $res ." **") if $res;
 	     }
 	   }
 	 }
@@ -729,15 +728,16 @@ $threads::shared::clone_warn = 1;
      });
 
   sub mess {
-    my $s  =shift;
+    my $s = shift;
     my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) =
       localtime(time);
-    push @messages, "$hour:$min:$sec $s";
+    push @messages, sprintf ("%02d:%02d:%02d $s", $hour,$min,$sec);
   }
+
   sub worker_start {
     lock ($start_thread);
     cond_signal ($start_thread);
-    print "start_work\n";
+    # print "start_work\n";
   }
 
   sub worker_add_task {
@@ -766,7 +766,8 @@ $threads::shared::clone_warn = 1;
   sub worker_break {
     $abort_flg = 1;
   }
-}				## end of worker
+}
+# END of worker
 
 
 # after create $work_thread !!!
@@ -880,28 +881,32 @@ sub create_window {
 			   {caption=> 'Open B',
 			    handler => sub {open_handler('b')},
 			    opt => 2},
-			   {caption=>'---'},
+			   {
+			    caption=>'---'},
 			   {caption=>'Open A with ..',
 			    handler => sub {open_with_dlg ('a')},
 			    opt => 1},
 			   {caption=>'Open B with ..',
 			    handler => sub {open_with_dlg ('b')},
 			    opt => 2},
-			   {caption=>'---'},
+			   {
+			    caption=>'---'},
 			   {caption=>'Copy A to clipboard',
 			    handler => sub {clipboard_copy('a')},
 			    opt => 1},
 			   {caption=>'Copy B to clipboard',
 			    handler => sub {clipboard_copy('b')},
 			    opt => 2},
-			   {caption=>'---'},
+			   {
+			    caption=>'---'},
 			   {caption=>'Rename A',
 			    handler => sub {rename_dlg('a')},
 			    opt => 1},
 			   {caption=>'Rename B',
 			    handler => sub {rename_dlg('b')},
 			    opt => 2},
-			   {caption=>'---'},
+			   {
+			    caption=>'---'},
 			   {caption=>'diff A and B',
 			    handler => \&diff_files,
 			    opt => 1 | 2 | 4},
@@ -1277,19 +1282,16 @@ sub rename_dlg {
 
     if (dir_depth ($new_name) > 1) {
       show_msg ("error", ::text ("only file-name without path allowed!"));
-    }
-    elsif (-e $new_path) {
+    } elsif (-e $new_path) {
       show_msg ("error", ::text ("file eixists:") . $new_path);
-    }
-    else {
+    } else {
       #      my $res = move ($old_path, $new_path);
       my $res = rename ($old_path, $new_path);
 
       if ($res) {
 	re_comp_files ($old_name, $is_dir);
 	re_comp_files ($new_name, $is_dir);
-      }
-      else {
+      } else {
 	show_msg ("error", "rename error '$old_path'->'$new_path':".
 		  decode ('utf-8',$!));
       }
@@ -1365,7 +1367,7 @@ sub select_files_in_dir_dlg {
     if is_dir_name ($file);
 
   my @path = split '/', $file;
-  pop @path; # remove file name
+  pop @path;			# remove file name
 
   my $dialog = Gtk2::Dialog->new (::text ("Directory synchronization"),
   				  $main_window,
@@ -1487,8 +1489,11 @@ sub ignore_path_dlg {
 
     #print "ignore:$path\n";
     Result_List::delete_path_match ($path, $is_dir);
-    if ($is_dir) {push @ignored_dirs, $path}
-    else {push @ignored_files, $path}
+    if ($is_dir) {
+      push @ignored_dirs, $path;
+    } else {
+      push @ignored_files, $path;
+    }
   }
 }
 
@@ -1525,7 +1530,8 @@ sub create_path_list {
                                #print "$File::Find::dir, d:$dep\n";
                                if ($dep <= $d) {
 				 return @_;
-			       };
+			       }
+			       ;
 			       return;
 			     } : undef),
 	   wanted => sub {
@@ -1635,7 +1641,7 @@ sub comp_path_lists {
     %base_parm = get_file_info ($base_path);
     %other_parm = ();
 
-    if (! exists $others_names{$n}) {# файл есть только в base_dir
+    if (! exists $others_names{$n}) { # файл есть только в base_dir
       Result_List::add ($n, $parm_a, $parm_b, $base_letter)
 	  if $base_parm{type} ne 'dir' or $comp_opt{show_dirs};
     } else {
@@ -1647,8 +1653,7 @@ sub comp_path_lists {
       if ($base_parm{type} ne $other_parm{type}) {
 	Result_List::add ($n, $parm_a, $parm_b, 'X');
 	# разнотипные файлы (директории) - синхронизация невозможна
-      }
-      elsif ($base_parm{type} eq 'dir') {
+      } elsif ($base_parm{type} eq 'dir') {
 	Result_List::add ($n, $parm_a, $parm_b, 'AB')
 	    if $comp_opt{show_all} and $comp_opt{show_dirs};
 	# не выполняем никаких проверок для катологов - просто добавляем
@@ -1710,7 +1715,8 @@ sub menu_popup {
       $patt |= 2;
     } else {
       $patt |= 3;
-    };
+    }
+    ;
     $patt |= 4 if not $fmark eq 'D';
 
     Menu::show ($menu, sub {my $opt = shift; return ($patt & $opt) == $opt});
@@ -1909,13 +1915,13 @@ sub get_func {
   }
 }
 
+
 sub clear_func {
   my ($self, $path) = @_;
 }
-
-#---------------------------------------------------------------------------
+# END clipboard
+#####################################################################
 # обработка  строки директории
-
 # удаление пробелов и замена специальных символов (имена директорий)
 sub rm_sp {
   my $str = shift;
@@ -1954,11 +1960,36 @@ sub envar {
   return $str;
 }
 
+sub date_fmt {
+  my $format = shift;
+  my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) =
+    localtime(time);
+  $year += 1900;
+  $mon += 1;
+  if (! defined $format or $format eq 'f') {
+    return sprintf ("%02d-%02d-%02d %02d:%02d:%02d",
+		    $year,$mon,$mday,$hour,$min,$sec) # full format for log
+  } elsif ($format eq 't') {
+    return sprintf ("%02d:%02d:%02d", $hour,$min,$sec);
+  }				# time only
+  elsif ($format eq 'c') {
+    return sprintf ("%02d%02d%02d-%02d%02d%02d",
+		    $year,$mon,$mday,$hour,$min,$sec)} # compact, for file names
+  else {
+    return "????";
+  }
+}
+
+##############################################################
+# operation log window
 {
   my $operations_log_buffer;
   my $glib_idle_id;
   my $butt_ab;
   my $butt_cl;
+  my $butt_sv;
+  my $end_date;
+  my $end_rx;
 
   sub operations_log_show {
     my $window = Gtk2::Window->new ('toplevel');
@@ -1968,6 +1999,7 @@ sub envar {
     $window->add ($mainbox);
     $window->set_modal(TRUE);
     $window->set_icon ($icon_pixbuf);
+    $window->signal_connect (destroy => sub {operations_log_close (undef,$window)});
 
     my $textview = Gtk2::TextView->new();
 
@@ -1985,17 +2017,15 @@ sub envar {
     my $hbox = Gtk2::HBox->new (FALSE, 5);
     $mainbox->pack_start($hbox, FALSE, FALSE, 0);
 
-
-
     $butt_cl =  Gtk2::Button->new (text ('Close'));
-    $butt_cl->signal_connect (clicked =>
-			   sub {undef $operations_log_buffer;
-				operations_log_remove_watch();
-				$window->destroy;
-			        start_compare();},
-			   $window);
+    $butt_cl->signal_connect (clicked => \&operations_log_close,
+			      $window);
     $butt_cl->set_sensitive (FALSE);
 
+    $butt_sv =  Gtk2::Button->new (text ('Save'));
+    $butt_sv->signal_connect (clicked => \&operations_log_save,
+			      $window);
+    $butt_sv->set_sensitive (FALSE);
 
 
     $butt_ab =  Gtk2::Button->new (text ('Abort'));
@@ -2007,10 +2037,26 @@ sub envar {
 			   $window);
 
     $hbox->pack_start ($butt_ab, TRUE, TRUE, 10);
+    $hbox->pack_start ($butt_sv, TRUE, TRUE, 10);
     $hbox->pack_start ($butt_cl, TRUE, TRUE, 10);
 
+    operations_log_add (date_fmt () . ' -- LOG CREATED -- ');
+    $end_rx = qr/(== END ==)|(== ABORT ==)/;
+    # нужна инициализация $end_rx здесь, иначе колбэк не видит значение (но видит переменную)
     operations_log_watch();
     $window->show_all;
+  }
+
+  sub operations_log_close {
+    my ($button, $window) = @_;
+    if (! $end_date) {
+      show_msg ('error', text ('operations in progress'));
+      return;
+    }
+    undef $operations_log_buffer;
+    operations_log_remove_watch();
+    $window->destroy;
+    start_compare();
   }
 
   sub operations_log_add {
@@ -2021,14 +2067,16 @@ sub envar {
     }
   }
 
-  # Glib idle callback
+
+  # Glib  callback
   sub operations_log_update {
    # print "update_operations_log\n";
 
     while (my $msg = worker_get_message()) {
       operations_log_add ($msg);
-      print "$msg\n";
-      if ($msg =~ /==(.+)==/) {	# '== ABORTED ==' or '== END =='
+      #print "$msg\n";
+
+      if ($msg =~ $end_rx) {	# '== ABORTED ==' or '== END =='
 	undef $glib_idle_id;
 	operations_log_oper_end();
 	return FALSE;
@@ -2054,10 +2102,39 @@ sub envar {
   sub operations_log_oper_end {
     $butt_ab->set_sensitive (FALSE);
     $butt_cl->set_sensitive (TRUE);
+    $end_date = date_fmt ('c');
+    $butt_sv->set_sensitive (TRUE);
+  }
+
+  sub operations_log_save {
+    my $dialog = Gtk2::FileChooserDialog->new
+      (::text ('Save log'),
+       undef,
+       'save',
+       'gtk-save'     => 'ok',
+       'gtk-cancel' => 'cancel');
+
+    $dialog->set_current_folder (decode ('utf-8', $ENV{HOME}));
+    $dialog->set_current_name ("dir-comp-$end_date.log");
+
+    if ($dialog->run eq 'ok') {
+      my $name = $dialog->get_filename;
+      print "save", $dialog->get_filename, "\n";
+      local *FILE;
+      if (open FILE, ">$name") {
+        print FILE $operations_log_buffer->get_text ($operations_log_buffer->get_start_iter,
+						     $operations_log_buffer->get_end_iter,
+						    FALSE);
+	close FILE;
+      }
+      else {
+	show_msg ('error', "Error open file '$name'");
+      }
+    }
+    $dialog->destroy;
   }
 }
-
-
+# END operation log
 
 sub show_help {
   my $dialog = Gtk2::Dialog->new (text ('Help'),
@@ -2149,6 +2226,8 @@ END_ICON
 		 'show all'              => {ru => 'показать все'},
                  'Help'                  => {ru => 'Справка'},
                  'Abort'                 => {ru => 'Прервать'},
+		 'Save'                  => {ru => 'Сохранить'},
+		 'Close'                 => {ru => 'Закрыть'},
                  'get file-list'         => {ru => 'получаю список файлов'},
                  'compare dirs'          => {ru => 'сравнение директорий'},
                  'Content is equevalent' => {ru => 'Содержимое совпадает'},
