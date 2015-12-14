@@ -40,7 +40,7 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
      {id=>'perm_b',  caption=>::text ('perm B'),type=>'text', align=> 0},
      {id=>'owner_a', caption=>::text ('own A'), type=>'text', align=> 0},
      {id=>'owner_b', caption=>::text ('own B'), type=>'text', align=> 0},
-#    {id=>'flags',   caption=>'flags',          type=>'text', align=> 0});
+#    {id=>'flags',   caption=>'flags',          type=>'text', align=> 0});# for debug
      {id=>'flags',   caption=>'flags',          type=>'hidden', align=> 0});
 
   my @row_color = (Gtk2::Gdk::Color->new (0xFFFF, 0xFFFF, 0xFFFF),
@@ -184,14 +184,14 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 
   sub validate_sel {
     my $sel = shift;
-    my $type;
+    my $m;
 
     for my $i (@{$sel}) {
-      $m = mark ($i) if not $type;
+      $m = mark ($i) if not $m;
       return 'E' if mark ($i) ne $m;
       # нельзя смешивать файлы и директории
     }
-    return $type;
+    return $m;
   }
 
   sub check_box_hnd {
@@ -319,9 +319,9 @@ show_version () if $ARGV[0] eq '-v' or $ARGV[0] eq '--version';
 
   sub set_sensitive_flg {
     my ($row, $flag) = @_;
+    # print "set_sensitive_flg:$row, $flag\n";
     my $flags = $list->{data}->[$row]->[$clm{flags}];
     my @bits = unpack ("aaa", $flags);
-    #print "bits:@bits\n";
     $bits[2] = $flag; # index of enable flag
     my $fl = pack ("aaa", @bits);
     $list->{data}->[$row]->[$clm{flags}] = $fl;
