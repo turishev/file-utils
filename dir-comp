@@ -797,7 +797,7 @@ sub start_operation {
 
   worker_start();
 
-  operations_log_show();
+  Oper_Log::create();
 
   worker_add_task ({oper      => 'start',
 		    file_type => '',
@@ -838,7 +838,7 @@ sub start_operation {
       $src = $start_dir_b . '/' . $row{name};
       $dst = $start_dir_a . '/' . $row{name};
     } else {
-      operations_log_add ("* ERROR oper code error for '$row{name}'");
+      Oper_Log::add ("* ERROR oper code error for '$row{name}'");
       $oper = 'e';
     }
 
@@ -1361,7 +1361,15 @@ sub dir_depth {
 
 ### operation log window #######################################################
 {
-  my $operations_log_buffer;
+  package Oper_Log;
+  use strict;
+  use warnings;
+  use utf8;
+  use open ':utf8';
+  use Encode;
+  use Glib qw/TRUE FALSE/;
+
+  my $log_buffer;
   my $glib_idle_id;
   my $butt_ab;
   my $butt_cl;
@@ -1369,7 +1377,7 @@ sub dir_depth {
   my $end_date;
   my $end_rx;
 
-  sub operations_log_show {
+  sub create {
     my $window = Gtk2::Window->new ('toplevel');
     $window->set_title ("$main_title:operations");
     $window->set_size_request (640, 480);
@@ -1377,11 +1385,11 @@ sub dir_depth {
     $window->add ($mainbox);
     $window->set_modal(TRUE);
     $window->set_icon ($icon_pixbuf);
-    $window->signal_connect (destroy => sub {operations_log_close (undef,$window)});
+    $window->signal_connect (destroy => sub {log_close (undef,$window)});
 
     my $textview = Gtk2::TextView->new();
 
-    $operations_log_buffer = $textview->get_buffer();
+    $log_buffer = $textview->get_buffer();
 
     my $scroll = Gtk2::ScrolledWindow->new;
     $scroll->set_policy ('automatic', 'automatic');
@@ -1395,21 +1403,21 @@ sub dir_depth {
     my $hbox = Gtk2::HBox->new (FALSE, 5);
     $mainbox->pack_start($hbox, FALSE, FALSE, 0);
 
-    $butt_cl =  Gtk2::Button->new (text ('Close'));
-    $butt_cl->signal_connect (clicked => \&operations_log_close,
+    $butt_cl =  Gtk2::Button->new (::text ('Close'));
+    $butt_cl->signal_connect (clicked => \&log_close,
 			      $window);
     $butt_cl->set_sensitive (FALSE);
 
-    $butt_sv =  Gtk2::Button->new (text ('Save'));
-    $butt_sv->signal_connect (clicked => \&operations_log_save,
+    $butt_sv =  Gtk2::Button->new (::text ('Save'));
+    $butt_sv->signal_connect (clicked => \&save,
 			      $window);
     $butt_sv->set_sensitive (FALSE);
 
 
-    $butt_ab =  Gtk2::Button->new (text ('Abort'));
+    $butt_ab =  Gtk2::Button->new (::text ('Abort'));
     $butt_ab->signal_connect (clicked =>
 			      sub {worker_break();
-				   operations_log_add ('-- ABORT REQUESTED --');
+				   add ('-- ABORT REQUESTED --');
 			          # $butt_ab->set_sensitive (FALSE);
 			      },
 			   $window);
@@ -1418,77 +1426,77 @@ sub dir_depth {
     $hbox->pack_start ($butt_sv, TRUE, TRUE, 10);
     $hbox->pack_start ($butt_cl, TRUE, TRUE, 10);
 
-    operations_log_add (time_format (time) . ' -- LOG CREATED -- ');
+    add (::time_format (time) . ' -- LOG CREATED -- ');
     $end_rx = qr/(== END ==)|(== ABORT ==)/;
     # нужна инициализация $end_rx здесь, иначе колбэк не видит значение (но видит переменную)
-    operations_log_watch();
+    watch();
     $window->show_all;
   }
 
-  sub operations_log_close {
+  sub log_close {
     my ($button, $window) = @_;
     if (! $end_date) {
-      show_msg ('error', text ('operations in progress'));
+      ::show_msg ('error', ::text ('operations in progress'));
       return;
     }
-    undef $operations_log_buffer;
-    operations_log_remove_watch();
+    undef $log_buffer;
+    remove_watch();
     $window->destroy;
-    start_compare();
+    ::start_compare();
   }
 
-  sub operations_log_add {
+  sub add {
     my $str = shift;
-    if (defined $operations_log_buffer) {
-      my $iter = $operations_log_buffer->get_end_iter();
-      $operations_log_buffer->insert ($iter, $str . "\n");
+    if (defined $log_buffer) {
+      my $iter = $log_buffer->get_end_iter();
+      $log_buffer->insert ($iter, $str . "\n");
     }
   }
 
   # Glib  callback
-  sub operations_log_update {
-   # print "update_operations_log\n";
+  sub update {
+    # print "update_operations_log\n";
 
-    while (my $msg = worker_get_message()) {
-      operations_log_add ($msg);
+    while (my $msg = ::worker_get_message()) {
+      add ($msg);
       #print "$msg\n";
 
       if ($msg =~ $end_rx) {	# '== ABORTED ==' or '== END =='
 	undef $glib_idle_id;
-	operations_log_oper_end();
+	oper_end();
 	return FALSE;
       }
     }
-    return TRUE; # FALSE - uninstall callback
+    return TRUE;		# FALSE - uninstall callback
   }
 
-  sub operations_log_watch {
-    operations_log_remove_watch();
-    # $glib_idle_id = Glib::Idle->add (\&operations_log_update);
+  sub watch {
+    remove_watch();
+    # $glib_idle_id = Glib::Idle->add (\&update);
     # Idle callback сильно грузит процессор
-    $glib_idle_id =  Glib::Timeout->add_seconds (1, \&operations_log_update);
+    $glib_idle_id =  Glib::Timeout->add_seconds (1, \&update);
   }
 
-  sub operations_log_remove_watch {
+  sub remove_watch {
     if (defined $glib_idle_id) {
       Glib::Source->remove ($glib_idle_id);
       undef $glib_idle_id;
     }
   }
 
-  sub operations_log_oper_end {
+  sub oper_end {
     $butt_ab->set_sensitive (FALSE);
     $butt_cl->set_sensitive (TRUE);
-    $end_date = time_format (time, 'c');
+    $end_date = ::time_format (time, 'c');
     $butt_sv->set_sensitive (TRUE);
   }
 
-  sub operations_log_save {
+  sub save {
     my $dialog = Gtk2::FileChooserDialog->new
       (::text ('Save log'),
        undef,
        'save',
-       'gtk-save'     => 'ok',
+       'gtk-save'   => 'ok',
        'gtk-cancel' => 'cancel');
 
     $dialog->set_current_folder (decode ('utf-8', $ENV{HOME}));
@@ -1499,13 +1507,13 @@ sub dir_depth {
       print "save", $dialog->get_filename, "\n";
       local *FILE;
       if (open FILE, ">$name") {
-        print FILE $operations_log_buffer->get_text ($operations_log_buffer->get_start_iter,
-						     $operations_log_buffer->get_end_iter,
-						    FALSE);
+        print FILE $log_buffer->get_text ($log_buffer->get_start_iter,
+					  $log_buffer->get_end_iter,
+					  FALSE);
 	close FILE;
       }
       else {
-	show_msg ('error', "Error open file '$name'");
+	::show_msg ('error', "Error open file '$name'");
       }
     }
     $dialog->destroy;
