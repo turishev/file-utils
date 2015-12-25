@@ -163,7 +163,8 @@ my $mode_box;
 my $depth_sp;
 my $icon_pixbuf;
 my $main_window = create_window ();
-
+my $exe_butt;
+my $clear_hidd_butt;
 my $break_oper = 0;
 
 init_controls ();
@@ -307,19 +308,35 @@ sub create_window {
 
   my $comp_butt = Gtk2::Button->new (text ('Compare'));
   $hbox->pack_start ($comp_butt, TRUE, TRUE, 0);
-  my $exe_butt = Gtk2::Button->new (text ('Execute'));
+  $exe_butt = Gtk2::Button->new (text ('Execute'));
+  $exe_butt->set_sensitive (FALSE);
   $hbox->pack_start ($exe_butt, TRUE, TRUE, 0);
 
-  $exe_butt->signal_connect (clicked => \&start_operation, $comp_butt);
-  $comp_butt->signal_connect (clicked => \&start_compare, $exe_butt);
+  $exe_butt->signal_connect (clicked =>
+			     sub {
+			       $comp_butt->set_sensitive (FALSE);
+			       start_operation();
+			       $comp_butt->set_sensitive (TRUE);
+			     });
+  $comp_butt->signal_connect (clicked =>
+			      sub {
+				$exe_butt->set_sensitive (FALSE);
+				start_compare();
+				$exe_butt->set_sensitive (TRUE);
+			      });
+
   #  $comp_butt->signal_connect (clicked => \&start_work, $exe_butt);
 
 
-  $butt = Gtk2::Button->new (text ('Clear hidden list'));
-  $butt->signal_connect (clicked => sub {@ignored_dirs = ();@ignored_files = ()},
+  $clear_hidd_butt = Gtk2::Button->new (text ('Clear hidden list'));
+  $clear_hidd_butt->signal_connect (clicked =>
+				    sub {my $b = shift;
+					 @ignored_dirs = ();
+					 @ignored_files = ();
+					 $b->set_sensitive (FALSE)},
 			 $window);
-  $hbox->pack_start ($butt, TRUE, TRUE, 0);
-
+  $clear_hidd_butt->set_sensitive (FALSE);
+  $hbox->pack_start ($clear_hidd_butt, TRUE, TRUE, 0);
 
   $butt = Gtk2::Button->new (text ('Help'));
   $butt->signal_connect (clicked => \&show_help, $window);
@@ -353,6 +370,11 @@ sub init_controls {
   $dir_box_a->set(decode ('utf-8', $ENV{PWD}));
   $dir_box_b->set(decode ('utf-8', $ENV{PWD}));
   $dir_box_a->focus;
+}
+
+sub re_init {
+  Result_List::clear();
+  $exe_butt->set_sensitive (FALSE);
 }
 
 sub show_msg {
@@ -541,7 +563,7 @@ sub window_press_key {
   }
 }
 
-# compare routines #############################################################
+### compare routines ###########################################################
 sub start_compare {
   #global var %comp_opt
   $comp_opt{check_date} = $chk_date->get_active;
@@ -901,7 +923,7 @@ sub is_dir_name {
   return substr ($_[0], -1,1) eq '/';
 }
 
-# menu handlers ################################################################
+### menu handlers ##############################################################
 sub open_with {
   my ($letter, @cmd) = @_;
   my $dir = ($letter eq 'a' ? $start_dir_a : $start_dir_b);
@@ -1159,6 +1181,7 @@ sub ignore_path_dlg {
     } else {
       push @ignored_files, $path;
     }
+    $clear_hidd_butt->set_sensitive (TRUE);
   }
 }
 
@@ -1669,6 +1692,7 @@ sub hide {
 
 	if ( $dialog->run eq 'ok') {
 	  $self->{entry}->set_text ($dialog->get_filename);
+	  ::re_init();
 	}
 	$dialog->destroy;
       };
