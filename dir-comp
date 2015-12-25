@@ -761,11 +761,11 @@ sub get_file_info {
     $info = rdev_format ($par[6]);
   }
   return (type  => $type,
-          size  => num_format($par[7]),
-          ctime => time_format($par[10]),
-          mtime => time_format($par[9]),
-          perm  => perm_format($par[2]),
-          owner => owner_format($par[4], $par[5]),
+          size  => num_format ($par[7]),
+          ctime => time_format ($par[10]),
+          mtime => time_format ($par[9]),
+          perm  => perm_format ($par[2]),
+          owner => owner_format ($par[4], $par[5]),
           other => $info);
 }
 
@@ -773,10 +773,10 @@ sub ignored {
   my $path = shift;
   for my $p (@ignored_dirs) {
     # последний символ в имени директории $p='/'
-    # тут два случая 1) частичное совпадение 
-    # с началом в пути к файлу
+    # тут два случая:
+    # 1) частичное совпадение с началом в пути к файлу
     return 1 if (substr $path, 0, length $p) eq $p;
-    # 2)полное совпадение имени директории ($path не содержит '/' на конце)
+    # 2) полное совпадение имени директории ($path не содержит '/' на конце)
     return 1 if $path eq (substr $p, 0, length ($p) - 1);
   }
   for my $p (@ignored_files) {
@@ -1273,34 +1273,28 @@ sub envar {
   return $str;
 }
 
-sub date_fmt {
-  my $format = shift;
+sub time_format {
+  my ($time, $format) = @_;
   my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) =
-    localtime(time);
+    localtime ($time);
   $year += 1900;
   $mon += 1;
   if (! defined $format or $format eq 'f') {
-    return sprintf ("%02d-%02d-%02d %02d:%02d:%02d",
-		    $year,$mon,$mday,$hour,$min,$sec) # full format for log
+    return sprintf ("%04d-%02d-%02d %02d:%02d:%02d",
+		    $year,$mon,$mday,$hour,$min,$sec)
+    # full format for log - DEFAULT!
   } elsif ($format eq 't') {
     return sprintf ("%02d:%02d:%02d", $hour,$min,$sec);
-  }				# time only
-  elsif ($format eq 'c') {
-    return sprintf ("%02d%02d%02d-%02d%02d%02d",
-		    $year,$mon,$mday,$hour,$min,$sec)} # compact, for file names
+    # time only
+  } elsif ($format eq 'c') {
+    return sprintf ("%04d%02d%02d-%02d%02d%02d",
+		    $year,$mon,$mday,$hour,$min,$sec)}
+    # compact - for file names
   else {
-    return "????";
+    return "?format?";
   }
 }
 
-sub time_format {
-  my $tm = shift;
-  my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst)
-    = localtime($tm);
-
-  return sprintf "%4d-%02d-%02d %02d:%02d:%02d",
-    $year+1900,$mon+1,$mday,$hour,$min,$sec;
-}
 
 sub num_format {
   my $x = shift;
@@ -1424,7 +1418,7 @@ sub dir_depth {
     $hbox->pack_start ($butt_sv, TRUE, TRUE, 10);
     $hbox->pack_start ($butt_cl, TRUE, TRUE, 10);
 
-    operations_log_add (date_fmt () . ' -- LOG CREATED -- ');
+    operations_log_add (time_format (time) . ' -- LOG CREATED -- ');
     $end_rx = qr/(== END ==)|(== ABORT ==)/;
     # нужна инициализация $end_rx здесь, иначе колбэк не видит значение (но видит переменную)
     operations_log_watch();
@@ -1485,7 +1479,7 @@ sub dir_depth {
   sub operations_log_oper_end {
     $butt_ab->set_sensitive (FALSE);
     $butt_cl->set_sensitive (TRUE);
-    $end_date = date_fmt ('c');
+    $end_date = time_format (time, 'c');
     $butt_sv->set_sensitive (TRUE);
   }
 
