@@ -59,7 +59,7 @@ my @menu_actions = ({name    => 'Open',
 		     key     => 'Ctrl-n',
 		     handler => \&rename_handler});
 
-our $VERSION = '1.05';
+our $VERSION = '1.1';
 
 my $icon_data;
 my $lang  = get_lang ();

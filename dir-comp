@@ -26,7 +26,7 @@ my $main_title  = 'dir-comp';
 my $open_helper = 'exo-open';
 my $editor      = 'leafpad';
 
-our $VERSION='1.02';
+our $VERSION='1.1';
 
 show_version () if defined $ARGV[0] and ($ARGV[0] eq '-v' or $ARGV[0] eq '--version');
 
