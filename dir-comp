@@ -9,7 +9,6 @@ use warnings;
 
 use Encode;
 use utf8;
-use open ':utf8';
 use File::Find;
 use File::Copy;
 use File::Copy::Recursive;
@@ -1388,7 +1387,6 @@ sub dir_depth {
   use strict;
   use warnings;
   use utf8;
-  use open ':utf8';
   use Encode;
   use Glib qw/TRUE FALSE/;
 
