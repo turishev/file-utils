@@ -20,12 +20,23 @@ use URI::Escape;
 
 use strict;
 
-my $file_manager="thunar";
-my $editor="leafpad";
-my $open_helper = 'exo-open';
+# XFCE4
+# my $file_manager="thunar";
+# my $editor="leafpad";
+# open_helper - command and parameters
+# my @open_helper = ('exo-open');
+
+
+# Gnome3
+my $file_manager="nautilus";
+my $editor="gedit";
+# open_helper - command and parameters
+my @open_helper = ('gio', 'open');
+
+
 my $main_title = 'file-search';
 
-my %default = (name_mode           => 'simple', # glob, regexp, simple
+my %default = (name_mode           => 'glob', # glob, regexp, simple
 	       name_case_sensitive => 0,
                directory => decode ('utf-8', $ENV{PWD}),
                text_case_sensitive => 0);
@@ -55,11 +66,14 @@ my @menu_actions = ({name    => 'Open',
                     {name    => 'Copy to ..',
 		     key     => 'Ctrl-s',
 		     handler => \&copy_to_handler},
+                    {name    => 'Bulk flat copy ..',
+		     key     => '',
+		     handler => \&bulk_flat_copy_handler},
                     {name    => 'Rename',
 		     key     => 'Ctrl-n',
 		     handler => \&rename_handler});
 
-our $VERSION = '1.1';
+our $VERSION = '1.2';
 
 my $icon_data;
 my $lang  = get_lang ();
@@ -80,6 +94,7 @@ my $stop_button;
 my $start_button;
 
 my $copy_to_dir= '';
+my %bulk_flat_copy_opt = (replace_str => '=', insert_before_suffix => 0);
 my $break_search;
 my (%search_name,  %search_time, %search_size,
     @search_types, %search_text, $search_dir, $search_depth);
@@ -106,7 +121,7 @@ my (%search_name,  %search_time, %search_size,
 
   $main_window->set_border_width (5);
   $main_window->set_title ($main_title);
-  $main_window->set_size_request (640, 480);
+  $main_window->set_size_request (800, 600);
 
   my $mainbox = Gtk2::VBox->new ();
   my $hbox;
@@ -245,6 +260,8 @@ init_controls ();
 Gtk2->main;
 
 0;
+## config ###################################################################
+
 
 ## localization #############################################################
 sub get_lang {
@@ -386,8 +403,7 @@ sub open_handler {
   #print  "open:", $result_list->selected_names, "\n";
   my $pid;
   if (not $pid = fork) {
-    exec ($open_helper,
-	  files_uri ($result_list->selected_names));
+    exec (@open_helper, files_uri ($result_list->selected_names));
   }
 }
 
@@ -586,6 +602,105 @@ sub copy_to_handler {
   }
   $dialog->destroy;
 }
+
+#/home/prog/myproj/file-utils/
+sub bulk_flat_copy_handler {
+  my @names = $result_list->selected_list;
+
+  my $len_short_path = length $search_dir;
+
+  my $dialog = Gtk2::Dialog->new (text ("Copy to with rename .."),
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-cancel' => 'cancel',
+				  'gtk-ok'     => 'ok');
+
+  my $vbox = Gtk2::VBox->new;
+  $dialog->vbox->add ($vbox);
+  my $hbox = Gtk2::HBox->new;
+  $vbox -> pack_start ($hbox, FALSE, FALSE, 0);
+
+  my $butt = Gtk2::Button->new (" dir ");
+  $butt->set_size_request(64);
+  $hbox -> pack_start ($butt, FALSE, TRUE, 0);
+
+  my $direntr = Gtk2::Entry->new;
+  $direntr -> set_text ($copy_to_dir);
+  $direntr -> set_width_chars (length $copy_to_dir);
+  $hbox->pack_start ($direntr, TRUE, TRUE, 0);
+
+  $butt->signal_connect (clicked => sub {
+                           my $res = file_dialog_run ("Copy to ..");
+                           $direntr->set_text ($res) if $res;
+                         }
+                        );
+
+  $hbox = Gtk2::HBox->new;
+  $vbox -> pack_start ($hbox, FALSE, FALSE, 0);
+  my $label = Gtk2::Label->new("replace '/' with:");
+  $hbox -> pack_start ($label, FALSE, TRUE, 0);
+
+  
+  my $replace_entr = Gtk2::Entry->new;
+  $replace_entr->set_text($bulk_flat_copy_opt{replace_str});
+  $replace_entr->set_width_chars (length $copy_to_dir);
+  $hbox->pack_start($replace_entr, TRUE, TRUE, 0);
+
+  my $insert_before_suff_cb  = Gtk2::CheckButton->new ("insert before suffix");
+  $vbox -> pack_start ($insert_before_suff_cb, FALSE, FALSE, 0);
+  $insert_before_suff_cb->set_active($bulk_flat_copy_opt{insert_before_suffix});
+
+  $dialog->set_default_response ('ok');
+  $dialog->show_all;
+  my $response = $dialog->run;
+
+  if ($response eq 'ok') {
+    $copy_to_dir = $direntr->get_text();
+
+    my $err = '';
+    my $repl_str = $replace_entr -> get_text();
+    $bulk_flat_copy_opt{replace_str} = $repl_str;
+    $bulk_flat_copy_opt{insert_before_suffix} = $insert_before_suff_cb->get_active();
+
+    for my $i (@names) {
+      my $dir = $i->{dir};
+      my $file = $i->{file};
+      my $path =  "$dir/$file";
+      my $dir_part = (length $i->{dir} == $len_short_path ? '' : substr($i->{dir}, $len_short_path + 1));
+      $dir_part =~ s/\//$repl_str/g if $dir_part;
+
+      my $new_path;
+
+      if ($dir_part) {
+	if ($bulk_flat_copy_opt{insert_before_suffix}) {
+	  if ($i->{file} =~ /(.+)(\..+?)/) {# insert before LAST suffix
+	    $new_path = $direntr->get_text() . '/' .  $1 .  $repl_str . $dir_part . $2;
+	  } else {
+	    $new_path = $direntr->get_text() . '/' .  $i->{file} . $repl_str . $dir_part;
+	  }
+	} else { #insert before file-name
+	  $new_path = $direntr->get_text() . '/' . $dir_part . $repl_str . $i->{file};
+	}
+      } else {
+	$new_path = $direntr->get_text() . '/' . $i->{file};
+      }
+      print encode("utf-8", "`$path'" . "  -> ". "`$new_path'" . "\n");
+
+
+      if (-f $new_path) {
+      	show_msg ('error', "File exists\n$new_path");
+      	$err .= "File exists\n$new_path\n";
+      } else {
+      	if (! copy ($path, $new_path)) {
+      	  $err .= "Copy error $path -> \n$new_path\n";
+      	}
+      }
+    }
+    show_msg ('error', $err) if $err;
+  }
+  $dialog->destroy;
+}
+
 
 sub exec_handler {
   my $cmd = $exec_box->cmd;
@@ -893,24 +1008,35 @@ sub get_key_handler {
 sub clipboard_copy {
   my $names = [$result_list->selected_names];
 
-  #map {print "cpb-copy:'$_'\n"} @$names;
+  map {print "cpb-copy:'$_'\n"} @$names;
+
+  # my @urls = map {"file://$_"} @$names;
+  # map {print "cpb-copy:'$_'\n"} @urls;
 
   my $target_text = {
       target => 'UTF8_STRING', # some string representing the drag type
       flags => [], # Gtk2::TargetFlags
       info => 1,  # some app-defined integer identifier
   };
-
   my $target_copy_file = {
       target => 'x-special/gnome-copied-files',
       flags => [], # Gtk2::TargetFlags
       info => 2,  # some app-defined integer identifier
   };
+  # my $target_copy_file_nau = {
+  #     target => 'x-special/nautilus-clipboard',
+  #     flags => [],# ['other-app'], # Gtk2::TargetFlags
+  #     info => 2,  # some app-defined integer identifier
+  # };
+
+  # nautilus doesn't work with this
 
   # CLIPBOARD - gtk2+
   my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
-  $clipboard->set_with_data (\&get_func, \&clear_func, $names,
-                             ($target_text, $target_copy_file));
+
+  $clipboard->set_with_data (\&get_func, \&clear_func, $names, ($target_text, $target_copy_file));
+  #$clipboard->set_with_data (\&get_func, \&clear_func, \@urls, ($target_text, $target_copy_file_nau));
+
   $clipboard->store ();
 
   #"PRIMARY" - X selection
@@ -1396,7 +1522,7 @@ sub new {
   $mode->append_text ('glob');
   $mode->append_text ('regexp');
   $mode->append_text ('simple');
-  $mode->set_size_request (68, -1);
+  $mode->set_size_request (82, -1);
   $mode->signal_connect ('changed' =>
 			 sub {$self->{case}->sensitive($mode->get_active != 0);
 			      $self->{case}->set_active(1)
@@ -1545,7 +1671,7 @@ sub new {
   $self->{unit}->append_text ('day');
   $self->{unit}->append_text ('hour');
   $self->{unit}->append_text ('min');
-  $self->{unit}->set_size_request (64, -1);
+  $self->{unit}->set_size_request (72, -1);
   return $self;
 }
 
@@ -1582,16 +1708,16 @@ sub new {
   $self->{'label'} = Gtk2::Label->new (::text ('size'));
   $self->{'label>'} = Gtk2::Label->new ('>');
   $self->{min} = Gtk2::Entry->new;
-  $self->{min}->set_size_request (48,-1);
+  $self->{min}->set_size_request (64,-1);
   $self->{'label<'} = Gtk2::Label->new ("<");
   $self->{max} = Gtk2::Entry->new;
-  $self->{max}->set_size_request (48,-1);
+  $self->{max}->set_size_request (64,-1);
   $self->{unit} = Gtk2::ComboBox->new_text;
   $self->{unit}->append_text ('b');
   $self->{unit}->append_text ('kb');
   $self->{unit}->append_text ('Mb');
   $self->{unit}->set_active (1);
-  $self->{unit}->set_size_request (48, -1);
+  $self->{unit}->set_size_request (64, -1);
   return $self;
 }
 
