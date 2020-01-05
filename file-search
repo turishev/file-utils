@@ -1006,10 +1006,14 @@ sub get_key_handler {
 }
 
 ### clipboard ##################################################################
+### use xclip console app to test clipboard
+### xclip -o  -sel clip
+### xclip -o  -sel prim
+
 sub clipboard_copy {
-  if (defined $gnome) {print "GNOME clipboard, copy\n";} else {print "Default clipboard, copy\n"};
   my $names = [$result_list->selected_names];
-  map {print "cpb-copy:'$_'\n"} @$names;
+  print "Clipboard, copy\n";  
+  map {print "file:'$_'\n"} @$names;
   my $target_text =
     {
      target => 'UTF8_STRING', # some string representing the drag type
@@ -1018,7 +1022,7 @@ sub clipboard_copy {
     };
   my $target_copy_file =
     {
-     target => defined $gnome ? 'x-special/nautilus-clipboard' : 'x-special/gnome-copied-files',
+     target => 'x-special/gnome-copied-files',
      flags => [],		# ['other-app'], # Gtk2::TargetFlags
      info => 2,			# some app-defined integer identifier
     };
@@ -1034,18 +1038,24 @@ sub clipboard_copy {
 }
 
 sub clipboard_cut {
-  if (defined $gnome) {print "GNOME clipboard, cut\n";} else {print "Default clipboard, cut\n"};
   my $names = [$result_list->selected_names];
-
-  my $target_copy_file = {
-      target => 'x-special/gnome-copied-files',
-      flags => [], # Gtk2::TargetFlags
-      info => 3,  # some app-defined integer identifier
-  };
+  print "Clipboard, cut\n";
+  map {print "file:'$_'\n"} @$names;
+  my $target_text =
+    {
+     target => 'UTF8_STRING', # some string representing the drag type
+     flags => [],	      # Gtk2::TargetFlags
+     info => 3,		      # some app-defined integer identifier
+    };
+  my $target_copy_file =
+    {
+     target => 'x-special/gnome-copied-files',
+     flags => [],		# ['other-app'], # Gtk2::TargetFlags
+     info => 4,			# some app-defined integer identifier
+    };
 
   my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
-  $clipboard->set_with_data (\&get_func, \&clear_func, $names,
-                             ($target_copy_file));
+  $clipboard->set_with_data (\&get_func, \&clear_func, $names, ( $target_text, $target_copy_file));
   $clipboard->store();
 }
 
@@ -1057,29 +1067,45 @@ sub get_func {
   # аналогично g_file_new_for_path
 
   $namestr = join("\n", files_uri (@$names)) . "\n";
-  print " get_func:info:$info;names:'$namestr'\n";
+  print " get_func:info:$info, names:'$namestr'\n";
 
   if (defined $gnome) {
     print "GNOME clipboard, get_func\n";
     if ($info == 1) {
-      print " get_func:copy:\n";
+      print "get_func, copy:\n";
       my $n = "x-special/nautilus-clipboard\ncopy\n" . $namestr;
       print "'$n'\n";
       $selectiondata->set ($selectiondata->target(), 8, $n);
     }
+    if ($info == 2) {
+      print " get_func, copy file:\n";
+      $selectiondata->set ($selectiondata->target(), 8, "copy\n" . $namestr);
+    }
+    if ($info == 3) {
+      print " get_func, cut text:\n";
+      my $n = "x-special/nautilus-clipboard\ncut\n" . $namestr;
+      print "'$n'\n";
+      $selectiondata->set ($selectiondata->target(), 8, $n);
+      $result_list->delete_names (@$names);
+    }
+    if ($info == 4) {
+      print " get_func, cut file:\n";
+      $selectiondata->set ($selectiondata->target(), 8, "cut\n" . $namestr);
+      $result_list->delete_names (@$names);
+    }
   } else {
     print "Default clipboard, get_func\n";
     if ($info == 1) {
+      print " get_func, copy text:\n";
       $selectiondata->set ($selectiondata->target(), 8, join ("\n", @$names));
     }
     if ($info == 2) {
-      print " get_func:copy:\n";
-      $selectiondata->set ($selectiondata->target(), 8,
-			   "copy\n" . $namestr);
+      print " get_func, copy file:\n";
+      $selectiondata->set ($selectiondata->target(), 8, "copy\n" . $namestr);
     }
-    if ($info == 3) {
-      $selectiondata->set ($selectiondata->target(), 8,
-			   "cut\n" . $namestr);
+    if ($info == 4) {
+      print " get_func, cut file:\n";
+      $selectiondata->set ($selectiondata->target(), 8, "cut\n" . $namestr);
       $result_list->delete_names (@$names);
     }
   }

@@ -28,6 +28,7 @@ use threads::shared;
 
 
 # Gnome3
+my $gnome = 1;
 my $file_manager="nautilus";
 # open_helper - command and parameters
 my @open_helper = ('gio', 'open');
@@ -1249,16 +1250,17 @@ sub get_func {
   # print "info:$info;names:'$namestr'\n";
 
   if ($info == 1) {
-    $selectiondata->set ($selectiondata->target(), 8, join ("\n", @$names));
+    if (defined $gnome) {
+      my $n = "x-special/nautilus-clipboard\ncopy\n" . $namestr . "\n";
+      $selectiondata->set ($selectiondata->target(), 8, $n);
+    }
+    else {
+      $selectiondata->set ($selectiondata->target(), 8, join ("\n", @$names));
+    }
   }
   if ($info == 2) {
     $selectiondata->set ($selectiondata->target(), 8,
                          "copy\n" . $namestr);
-  }
-  if ($info == 3) {
-    $selectiondata->set ($selectiondata->target(), 8,
-                         "cut\n" . $namestr);
-    Result_List::delete_item (Result_List::selected_inx_0());
   }
 }
 
