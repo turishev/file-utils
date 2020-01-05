@@ -28,6 +28,7 @@ use strict;
 
 
 # Gnome3
+my $gnome = 1;
 my $file_manager="nautilus";
 my $editor="gedit";
 # open_helper - command and parameters
@@ -1006,45 +1007,34 @@ sub get_key_handler {
 
 ### clipboard ##################################################################
 sub clipboard_copy {
+  if (defined $gnome) {print "GNOME clipboard, copy\n";} else {print "Default clipboard, copy\n"};
   my $names = [$result_list->selected_names];
-
   map {print "cpb-copy:'$_'\n"} @$names;
+  my $target_text =
+    {
+     target => 'UTF8_STRING', # some string representing the drag type
+     flags => [],	      # Gtk2::TargetFlags
+     info => 1,		      # some app-defined integer identifier
+    };
+  my $target_copy_file =
+    {
+     target => defined $gnome ? 'x-special/nautilus-clipboard' : 'x-special/gnome-copied-files',
+     flags => [],		# ['other-app'], # Gtk2::TargetFlags
+     info => 2,			# some app-defined integer identifier
+    };
 
-  # my @urls = map {"file://$_"} @$names;
-  # map {print "cpb-copy:'$_'\n"} @urls;
-
-  my $target_text = {
-      target => 'UTF8_STRING', # some string representing the drag type
-      flags => [], # Gtk2::TargetFlags
-      info => 1,  # some app-defined integer identifier
-  };
-  my $target_copy_file = {
-      target => 'x-special/gnome-copied-files',
-      flags => [], # Gtk2::TargetFlags
-      info => 2,  # some app-defined integer identifier
-  };
-  # my $target_copy_file_nau = {
-  #     target => 'x-special/nautilus-clipboard',
-  #     flags => [],# ['other-app'], # Gtk2::TargetFlags
-  #     info => 2,  # some app-defined integer identifier
-  # };
-
-  # nautilus doesn't work with this
-
-  # CLIPBOARD - gtk2+
   my $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('CLIPBOARD', TRUE));
-
   $clipboard->set_with_data (\&get_func, \&clear_func, $names, ($target_text, $target_copy_file));
-  #$clipboard->set_with_data (\&get_func, \&clear_func, \@urls, ($target_text, $target_copy_file_nau));
-
   $clipboard->store ();
 
+  ########################
   #"PRIMARY" - X selection
   $clipboard = Gtk2::Clipboard->get (Gtk2::Gdk::Atom->intern ('PRIMARY', TRUE));
   $clipboard->set_text (join "\n", @$names);
 }
 
 sub clipboard_cut {
+  if (defined $gnome) {print "GNOME clipboard, cut\n";} else {print "Default clipboard, cut\n"};
   my $names = [$result_list->selected_names];
 
   my $target_copy_file = {
@@ -1066,20 +1056,32 @@ sub get_func {
   # и другие символы, минимум это - " #%"
   # аналогично g_file_new_for_path
 
-  $namestr = join "\n", files_uri (@$names);
-  #print "info:$info;names:'$namestr'\n";
+  $namestr = join("\n", files_uri (@$names)) . "\n";
+  print " get_func:info:$info;names:'$namestr'\n";
 
-  if ($info == 1) {
-    $selectiondata->set ($selectiondata->target(), 8, join ("\n", @$names));
-  }
-  if ($info == 2) {
-    $selectiondata->set ($selectiondata->target(), 8,
-                         "copy\n" . $namestr);
-  }
-  if ($info == 3) {
-    $selectiondata->set ($selectiondata->target(), 8,
-                         "cut\n" . $namestr);
-    $result_list->delete_names (@$names);
+  if (defined $gnome) {
+    print "GNOME clipboard, get_func\n";
+    if ($info == 1) {
+      print " get_func:copy:\n";
+      my $n = "x-special/nautilus-clipboard\ncopy\n" . $namestr;
+      print "'$n'\n";
+      $selectiondata->set ($selectiondata->target(), 8, $n);
+    }
+  } else {
+    print "Default clipboard, get_func\n";
+    if ($info == 1) {
+      $selectiondata->set ($selectiondata->target(), 8, join ("\n", @$names));
+    }
+    if ($info == 2) {
+      print " get_func:copy:\n";
+      $selectiondata->set ($selectiondata->target(), 8,
+			   "copy\n" . $namestr);
+    }
+    if ($info == 3) {
+      $selectiondata->set ($selectiondata->target(), 8,
+			   "cut\n" . $namestr);
+      $result_list->delete_names (@$names);
+    }
   }
 }
 
