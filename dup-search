@@ -34,7 +34,7 @@ my $file_manager="nautilus";
 my @open_helper = ('gio', 'open');
 
 
-my $main_title  = 'dbl-comp';
+my $main_title  = 'dup-comp';
 
 our $VERSION='1.0';
 
@@ -401,10 +401,10 @@ sub start_compare {
 
   progress_end();
 
-  # Result_List::row_count() == 0 and ! $break_oper
-  #     and show_msg ('info', text ('No differences were found'));
+  Result_List::row_count() == 0 and ! $break_oper
+      and show_msg ('info', text ('No duplicates were found'));
 
-  # Result_List::clear() if $break_oper;
+  Result_List::clear() if $break_oper;
 }
 
 sub create_path_list {
@@ -449,22 +449,24 @@ sub search_duplicates {
   my $group_started = 0;
 
   for (my $i = 0; $i<=  $#{$names}; $i++) {
+    &$iter_callback if defined $iter_callback;
     $group_started = 0;
     my $base_name = $names->[$i];
     if (! exists($ignore{$i})) {
       my $base_path = $start_dir .'/' . $base_name;
       %base_parm = get_file_info ($base_path);
 
-      print encode('utf8', $base_path) . "\n";
+      # print encode('utf8', $base_path) . "\n";
       for (my $j = $i+1; $j <=  $#{$names}; $j++) {
 	my $other_name = $names->[$j];
 	my $other_path = $start_dir .'/' . $other_name;
 	my %other_parm = get_file_info ($other_path);
 
-	print "  ". encode('utf8', $other_path) . "\n";
+	#print "  ". encode('utf8', $other_path) . "\n";
 
-	if (! exists($ignore{$j}) && $base_parm{type} eq 'file' && $other_parm{type} eq 'file' &&  ($base_parm{size} == $other_parm{size} && compare ($base_path, $other_path) == 0)) {
-	  print "   ***\n";
+	if (! exists($ignore{$j}) && $base_parm{type} eq 'file' && $other_parm{type} eq 'file'
+	    #&&  $base_parm{size} eq $other_parm{size}
+	    && compare ($base_path, $other_path) == 0) {
 	  $ignore{$i} = 1;
 	  $ignore{$j} = 1;
 
@@ -475,8 +477,6 @@ sub search_duplicates {
 	  }
 	  Result_List::add ($other_name, \%other_parm);
 	}
-
-	&$iter_callback if defined $iter_callback;
       }
     }
   }
