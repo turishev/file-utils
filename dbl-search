@@ -1,0 +1,1109 @@
+#!/usr/bin/perl
+######################################################################
+# Copyright (c) 2014-2015 Turishev Evgeniy <ew_turi@mail.ru>
+# This file is licensed under the GNU General Public License version 3
+# or any later version.
+#######################################################################
+use strict;
+use warnings;
+
+use Encode;
+use utf8;
+use File::Find;
+use File::Copy;
+use File::Copy::Recursive;
+use File::Path;
+use File::Basename;
+use MIME::Base64 qw(decode_base64);
+use File::Compare;
+use URI::Escape;
+
+use threads;
+use threads::shared;
+
+
+# XFCE4
+# my $open_helper = 'exo-open';
+# my $editor      = 'leafpad';
+
+
+# Gnome3
+my $gnome = 1;
+my $file_manager="nautilus";
+# open_helper - command and parameters
+my @open_helper = ('gio', 'open');
+
+
+my $main_title  = 'dbl-comp';
+
+our $VERSION='1.0';
+
+show_version () if defined $ARGV[0] and ($ARGV[0] eq '-v' or $ARGV[0] eq '--version');
+
+my $lang;
+BEGIN {# set $lang
+  my ($x, $codepage) = split /\./, $ENV{LANG};
+  my ($language, $country) = split /_/, $x;
+
+  if ($codepage =~ /utf-?8/i) {
+    $lang = lc ($language);
+  } else {
+    $lang = 'en';
+  }
+}
+
+use Glib qw /TRUE FALSE/;
+use Gtk2 '-init';
+
+my ($start_dir, %comp_opt);
+my ($icon_data, %local_text, %help_text);
+
+my $dir_box;
+
+my $progress_bar;
+my $depth_sp;
+my $icon_pixbuf;
+my $main_window = create_window ();
+my $exe_butt;
+my $clear_hidd_butt;
+my $break_oper = 0;
+
+init_controls ();
+
+my @tmp_files;
+
+Gtk2->main;
+
+0;
+
+######################################################################
+sub create_window {
+  eval {
+    my $raw_data = decode_base64 ($icon_data);
+    my $pixbufloader = Gtk2::Gdk::PixbufLoader->new;
+    $pixbufloader->write ($raw_data);
+    $pixbufloader->close;
+    $icon_pixbuf = $pixbufloader->get_pixbuf;
+  };
+  if ($@) {
+    print STDERR "error create icon\n";
+  }
+  undef $icon_data;
+
+  my $window = Gtk2::Window->new ('toplevel');
+  $window->signal_connect (destroy => \&on_exit);
+  $window->set_border_width (5);
+  $window->set_title ($main_title);
+  $window->set_size_request (640, 480);
+
+  my $mainbox = Gtk2::VBox->new ();
+
+  $dir_box = Dir_Box->new (label => 'dir');
+
+  $mainbox->pack_start ($dir_box->{box}, FALSE, FALSE, 0);
+
+  # кнопки управления
+  my $hbox = Gtk2::HBox->new (FALSE, 5);
+
+
+  my $butt;
+
+  my $lb = Gtk2::Label->new (text ('search depth') . ':');
+  $hbox -> pack_start ($lb, FALSE, FALSE, 0);
+  $depth_sp = Gtk2::SpinButton->new (Gtk2::Adjustment->new(0,0,100,1,0,0),0,0);
+  $hbox -> pack_start ($depth_sp, FALSE, FALSE, 0);
+  $depth_sp->set_size_request (48);
+
+  $mainbox -> pack_start($hbox, FALSE, FALSE, 0);
+
+
+  # bit flags for control  menu item show
+  # 1- only A, 2 - only B, 4 - only files (for dirs not allowed)
+  my $menu = Menu::create (
+			   {caption=> 'Open',
+			    handler => sub {open_handler()},
+			    opt => 1},
+			   {caption=> 'Open directory',
+			    handler => sub {open_dir_handler()},
+			    opt => 1},
+			  );
+
+  #EventBox нужен для корректного позиционировани контекстного меню
+  my $eventbox = Gtk2::EventBox->new();
+  #$eventbox->set_above_child (TRUE);
+
+  $eventbox->signal_connect('button-release-event' => \&menu_popup, $menu);
+  # Result_List использует событие 'button-press-event' для выделения строк
+  # его перехватывать нельзя, перехватываем только 'button-release-event'
+  
+  Result_List::create();
+
+  $eventbox->add (Result_List::box());
+
+  $mainbox->pack_start ($eventbox, TRUE, TRUE, 0);
+
+  # кнопки управления
+  $hbox = Gtk2::HBox->new(TRUE);
+
+  my $comp_butt = Gtk2::Button->new (text ('Search'));
+  $hbox->pack_start ($comp_butt, TRUE, TRUE, 0);
+  $exe_butt = Gtk2::Button->new (text ('Execute'));
+  $exe_butt->set_sensitive (FALSE);
+  $hbox->pack_start ($exe_butt, TRUE, TRUE, 0);
+
+  $exe_butt->signal_connect (clicked =>
+			     sub {
+			       $comp_butt->set_sensitive (FALSE);
+			       start_operation();
+			       $comp_butt->set_sensitive (TRUE);
+			     });
+  $comp_butt->signal_connect (clicked =>
+			      sub {
+				$exe_butt->set_sensitive (FALSE);
+				start_compare();
+				$exe_butt->set_sensitive (TRUE);
+			      });
+
+  $butt = Gtk2::Button->new (text ('Help'));
+  $butt->signal_connect (clicked => \&show_help, $window);
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+
+  $butt =  Gtk2::Button->new (text ('Exit'));
+  $butt->signal_connect (clicked => \&on_exit, $window);
+  $hbox->pack_start ($butt, TRUE, TRUE, 0);
+
+  $mainbox->pack_start($hbox, FALSE, FALSE, 0);
+
+  $window->signal_connect ('key-press-event' => \&window_press_key);
+
+  $window->add ($mainbox);
+  $window->show_all;
+  # после $main_window->show_all !!
+  $window->set_icon ($icon_pixbuf);
+
+  return $window;
+}
+
+### GUI routines ############################################################
+sub on_exit {
+  $break_oper = 1;
+  Gtk2->main_quit;
+}
+
+sub init_controls {
+  Result_List::clear();
+  $dir_box->set(decode ('utf-8', $ENV{PWD}));
+  $dir_box->focus;
+}
+
+sub menu_popup {
+  my ($widget, $event, $menu) = @_;
+  my @sel = Result_List::selected_inx();
+
+  if ($#sel == 0 and $event->button == 3) { # только для одной строчки
+    Menu::show ($menu, sub {my $opt = shift; return  TRUE;});
+  }
+}
+
+
+sub open_dir_handler {
+  my $name = Result_List::selected_name();
+
+  #оставить только имя директории
+  #$name =~ s/\/[^\/]+?$//;
+  my $path = $start_dir . '/' . $name;
+  my $dir = dirname($path);
+  print "open dir: $dir\n";
+  my $pid;
+  if (not $pid = fork) {
+    exec ($file_manager, $dir);
+  }
+}
+
+
+sub re_init {
+  Result_List::clear();
+  $exe_butt->set_sensitive (FALSE);
+}
+
+sub show_msg {
+  my ($type, $text) = @_;
+  my $butt = 'ok';
+
+  if ($type eq 'question') {
+    $butt = 'yes-no';
+  }
+  my $dialog = Gtk2::MessageDialog->new ($main_window,
+					 'destroy-with-parent',
+					 $type, # message type
+					 $butt, # which set of buttons?
+					 text ($text));
+
+  if ($dialog->run eq 'yes') {
+    $dialog->destroy;
+    return 1;
+  } else {
+    $dialog->destroy;
+    return 0;
+  }
+}
+
+sub show_text {
+  my ($text, $title) = @_;
+  my $dialog = Gtk2::Dialog->new ($title,
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-ok'     => 'ok');
+
+  $dialog->set_size_request (640, 480);
+
+  my $textview = Gtk2::TextView->new();
+  my $scroll = Gtk2::ScrolledWindow->new;
+  $scroll->set_policy ('automatic', 'automatic');
+  $scroll->add ($textview);
+
+  $textview->set_editable (FALSE);
+  $textview->set_wrap_mode ('word');
+
+  my $buffer = $textview->get_buffer();
+  $buffer->set_text ($text);
+
+  $dialog->vbox->add ($scroll);
+  $dialog->show_all;
+  my $response = $dialog->run;
+  $dialog->destroy;
+}
+
+sub show_help {
+  my $dialog = Gtk2::Dialog->new (text ('Help'),
+				  $main_window,
+				  ['modal', 'destroy-with-parent'],
+				  'gtk-ok'     => 'ok');
+
+  $dialog->set_size_request (640, 480);
+  my $textview = Gtk2::TextView->new();
+  my $scroll = Gtk2::ScrolledWindow->new;
+  $scroll->set_policy ('automatic', 'automatic');
+  $scroll->add ($textview);
+
+  $textview->set_editable (FALSE);
+  $textview->set_wrap_mode ('word');
+
+  my $buffer = $textview->get_buffer();
+  my $head_tag = $buffer->create_tag ('head',
+				      'foreground' => '#006600',
+				      'weight'     => 900);
+  my $start = $buffer->get_start_iter();
+  my $end;
+
+  for my $i (@{$help_text{$lang}}) {
+    $buffer->insert_with_tags ($start, $i->{title} . "\n\n", $head_tag);
+    $buffer->insert ($start, $i->{text} . "\n\n");
+  }
+
+  $dialog->vbox->add ($scroll);
+  $dialog->show_all;
+  my $response = $dialog->run;
+  $dialog->destroy;
+}
+
+sub gui_upd {
+  progress_next ();
+  while (Glib::MainContext->default->pending) {
+    Glib::MainContext->default->iteration (FALSE);
+  }
+}
+
+### key handlers ###############################################################
+sub window_press_key {
+  my ($widget, $event, $parameter)= @_;
+  my $key_nr = $event->keyval();
+  my $modif =  $event->state();
+
+  if ($modif >= ['control-mask'] and $key_nr == 113) { #ctrl-q
+    Gtk2->main_quit;
+  }
+  return FALSE;
+}
+
+### progress indicator #########################################################
+{
+  my $all;
+  my $curr;
+  my $pb;
+  my $dialog;
+
+  sub progress_start {
+    my ($files_num, $text) = @_;
+    $all = $files_num;
+    $dialog = Gtk2::Dialog->new (text ("Please wait") . '...',
+				 $main_window,
+				 ['modal', 'destroy-with-parent'],
+				 'gtk-cancel' => 'cancel');
+    $dialog->set_size_request (300, -1);
+    $dialog->signal_connect (response => sub {
+			       $break_oper = 1;
+			       $dialog->destroy()});
+    $pb =Gtk2::ProgressBar->new;
+
+    $pb->set_text ($text);
+    $pb->set_fraction (0);
+    $pb->set_pulse_step (0.01);
+    $dialog->vbox->add ($pb);
+    $dialog->show_all;
+    $break_oper = 0;
+  }
+
+  sub progress_reset {
+    my ($files_num, $text) = @_;
+    $all = $files_num;
+    $pb->set_text ($text);
+    $pb->set_fraction (0);
+    $pb->set_pulse_step (0.01);
+  }
+
+  sub progress_next {
+    #$progress_bar->set_text ('progress');
+    if ($all) {
+      $curr++;
+      $pb->set_fraction ($curr / $all);
+    } else {
+      $pb->pulse;
+    }
+  }
+
+  sub progress_end {
+    $pb->set_text ('');
+    $pb->set_fraction (0);
+    $all = $curr = 0;
+    $dialog->destroy();
+    #$dialog->response ('ok'); - call response-callback - not needed
+  }
+}
+
+### compare routines ###########################################################
+sub start_compare {
+  #global var %comp_opt
+  $comp_opt{search_depth} = $depth_sp->get_value;
+
+  $start_dir = $dir_box->get;
+
+  Result_List::clear();
+
+  my @names;
+
+  progress_start (0, text ('get file-list') . ' A');
+  create_path_list ($start_dir, \@names, $comp_opt{search_depth});
+  #print "@names"; print "\n";
+  progress_reset (0, text ('search duplicates'));
+
+  search_duplicates (\@names, \&progress_next);
+
+  progress_end();
+
+  # Result_List::row_count() == 0 and ! $break_oper
+  #     and show_msg ('info', text ('No differences were found'));
+
+  # Result_List::clear() if $break_oper;
+}
+
+sub create_path_list {
+  my ($dir, $res, $depth) = @_;
+  my $d = $depth + dir_depth ($dir) - 1 if $depth;
+  eval {
+    my $cnt = 0;
+    find ({preprocess => ($depth?
+			  sub {my $dep = dir_depth ($File::Find::dir);
+                               #print "$File::Find::dir, d:$dep\n";
+                               if ($dep <= $d) {
+				 return @_;
+			       }
+			       ;
+			       return;
+			     } : undef),
+	   wanted => sub {
+	     die if $break_oper;
+	     return if /^\.\.?$/;
+	     my $path = decode ('utf8', $File::Find::name);
+	     my $p = substr $path, (length $dir) + 1;
+	     push @$res,  $p;
+
+	     gui_upd (), $cnt = 0 if $cnt++ >= 20;
+	   }},
+	  encode ('utf8', $dir));
+  };
+  if ($@ and ! $break_oper) {
+    show_msg ('error', "Find file error: $@\n$dir");
+  }
+}
+
+sub search_duplicates {
+  my ($names, $iter_callback) = @_;
+  my ($base_dir);
+  my (%base_parm, $parm_a);
+
+  #map {print "$_:$comp_opt{$_}\n"} keys %comp_opt;
+
+  my %ignore = ();
+
+  my $group_started = 0;
+
+  for (my $i = 0; $i<=  $#{$names}; $i++) {
+    $group_started = 0;
+    my $base_name = $names->[$i];
+    if (! exists($ignore{$i})) {
+      my $base_path = $start_dir .'/' . $base_name;
+      %base_parm = get_file_info ($base_path);
+
+      print encode('utf8', $base_path) . "\n";
+      for (my $j = $i+1; $j <=  $#{$names}; $j++) {
+	my $other_name = $names->[$j];
+	my $other_path = $start_dir .'/' . $other_name;
+	my %other_parm = get_file_info ($other_path);
+
+	print "  ". encode('utf8', $other_path) . "\n";
+
+	if (! exists($ignore{$j}) && $base_parm{type} eq 'file' && $other_parm{type} eq 'file' &&  ($base_parm{size} == $other_parm{size} && compare ($base_path, $other_path) == 0)) {
+	  print "   ***\n";
+	  $ignore{$i} = 1;
+	  $ignore{$j} = 1;
+
+	  if (! $group_started) {
+	    $group_started = 1;
+	    Result_List::add_separator ();
+	    Result_List::add ($base_name, \%base_parm);
+	  }
+	  Result_List::add ($other_name, \%other_parm);
+	}
+
+	&$iter_callback if defined $iter_callback;
+      }
+    }
+  }
+}
+
+
+sub get_file_info {
+  my $name = shift;
+  my @par = lstat ($name);
+  #print Encode::encode('utf-8',$name), ", par:@par\n";
+  #               0 dev      device number of filesystem
+  #               1 ino      inode number
+  #               2 mode     file mode  (type and permissions)
+  #               3 nlink    number of (hard) links to the file
+  #               4 uid      numeric user ID of file's owner
+  #               5 gid      numeric group ID of file's owner
+  #               6 rdev     the device identifier (special files only)
+  #               7 size     total size of file, in bytes
+  #               8 atime    last access time in seconds since the epoch
+  #               9 mtime    last modify time in seconds since the epoch
+  #              10 ctime    inode change time in seconds since the epoch (*)
+  #              11 blksize  preferred block size for file system I/O
+  #              12 blocks   actual number of blocks allocated
+
+  if (not @par) {
+    print STDERR "get_file_info:file not exists? '$name'\n";
+    return;
+  }
+  my $type = file_type_format ($par[2]);
+  my $info;
+  if ($type eq 'l') {
+    $info = "-> ". readlink ($name);
+  }
+  if ($type eq 'c' or $type eq 'b') {
+    $info = rdev_format ($par[6]);
+  }
+  return (type  => $type,
+          size  => num_format ($par[7]),
+          ctime => time_format ($par[10]),
+          mtime => time_format ($par[9]),
+          perm  => perm_format ($par[2]),
+          owner => owner_format ($par[4], $par[5]),
+          other => $info);
+}
+
+
+### operation proceduries ######################################################
+sub start_operation {
+  my $err;
+  my @inxes;
+  Result_List::get_oper_inx_list (\@inxes);
+
+  return if $#inxes < 0;
+  show_msg ('question', 'Execute all operation?') or return;
+
+  for my $i (@inxes) {
+    last if $break_oper;
+    my %row = Result_List::row ($i);
+    my $path = $start_dir . '/' . $row{name};
+    unlink $path or print decode ('utf-8', $!);
+  }
+
+  start_compare();
+}
+
+sub check_path {
+  my $d = dirname ($_[0]);
+
+  if (! -d $d) {
+    my $dirs = eval {mkpath ($d)};
+    return "create dir '$d' error " . decode ('utf-8', $@) . "\n" unless $dirs;
+  }
+  return undef;
+}
+
+sub is_dir_name {
+  return substr ($_[0], -1,1) eq '/';
+}
+
+### menu handlers ##############################################################
+sub open_with {
+  my @cmd = @_;
+  my $name = $start_dir . '/'. Result_List::selected_name();
+
+  if (-e $name) {
+    if (not fork) {
+      print STDERR "open:@cmd $name\n";
+      exec (@cmd, files_uri ($name));
+    }
+  } else {
+    show_msg ("File '$name' not exists\n");
+  }
+}
+
+sub open_handler {
+  open_with (@open_helper);
+}
+
+
+
+## localization #############################################################
+sub text {
+  my $key = shift;
+  $lang eq 'en' and return $key;
+  #print "lang:$lang, key:$key->", $local_text {$key}->{$lang}, "\n";
+  exists $local_text {$key}->{$lang} ? return $local_text {$key}->{$lang} : return $key;
+}
+
+sub show_version {
+  print "$main_title $VERSION\n";
+  exit;
+}
+
+
+### utils ######################################################################
+sub rm_sp {
+  my $str = shift;
+  $str =~ s/^\s+//g;
+  $str =~ s/\s+$//g;
+  return $str;
+}
+
+# замена ~/ домашним каталогом
+sub home {
+  my $str = shift;
+  if ($str =~ /^~\//) {
+    $str =~ s/^~/decode ('utf-8', $ENV{HOME})/e;
+  }
+  return $str;
+}
+
+# замена ./ текущим  каталогом
+sub pwd {
+  my $str = shift;
+  if ($str =~ /^\.\//) {
+    $str =~ s/^\./decode ('utf-8', $ENV{PWD})/e;
+  }
+  return $str;
+}
+
+# замена переменной окружения $XXX её значением
+sub envar {
+  my $str = shift;
+  if ($str =~ /^\$.+\//) {
+    my $var = $&;
+    $var =~ s/\/$//;
+    $var =~ s/^\$//;
+    $str =~ s/^\$.+\//decode ('utf-8', $ENV{$var})/e;
+  }
+  return $str;
+}
+
+sub time_format {
+  my ($time, $format) = @_;
+  my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) =
+    localtime ($time);
+  $year += 1900;
+  $mon += 1;
+  if (! defined $format or $format eq 'f') {
+    return sprintf ("%04d-%02d-%02d %02d:%02d:%02d",
+		    $year,$mon,$mday,$hour,$min,$sec)
+    # full format for log - DEFAULT!
+  } elsif ($format eq 't') {
+    return sprintf ("%02d:%02d:%02d", $hour,$min,$sec);
+    # time only
+  } elsif ($format eq 'c') {
+    return sprintf ("%04d%02d%02d-%02d%02d%02d",
+		    $year,$mon,$mday,$hour,$min,$sec)}
+    # compact - for file names
+  else {
+    return "?format?";
+  }
+}
+
+
+sub num_format {
+  my $x = shift;
+  my @a;
+  my $i = 3;
+  while ($i < length($x)) {
+    push @a, substr($x, -$i, 3);
+    $i += 3;
+  }
+  push @a, substr ($x, 0, 3 + length($x) - $i);
+
+  return join '_', reverse @a;
+}
+
+sub file_type_format {
+  my $tp = shift;
+  $tp >>= 12;
+  my %type_sym = (8  => 'file',
+                  4  => 'dir',
+                  10 => 'link',
+                  12 => 'sock',
+                  1  => 'pipe',
+                  2  => 'char',
+                  6  => 'block');
+
+  return $type_sym {$tp};
+}
+
+sub perm_format {
+  my $perm = shift;
+  $perm &= 07777;
+  return sprintf "%04o", $perm;
+}
+
+sub owner_format {
+  my ($uid, $gid) = @_;
+  my $uname = getpwuid($uid);
+  my $gname = getgrgid($gid);
+  return ($uname? $uname : $uid) . ':' . ($gname ? $gname : $gid);
+}
+
+sub rdev_format {
+  return sprintf "%03d,%03d,%03d",
+    ($_[0] >> 16) & 0xff,
+    ($_[0] >> 8) & 0xff,
+    $_[0] & 0xff;
+}
+
+sub files_uri {
+  my @res;
+  map {push @res,  'file://' . uri_escape ($_, q( ?<>{}#%`;"))} @_;
+  return @res;
+}
+
+sub dir_depth {
+  my $s = shift;
+  my $res = 0;
+  $res = 1 if substr ($s, 0, 1) ne '/';
+  $res-- if substr ($s, -1, 1) eq '/';
+  my $d = $s =~ tr[/][];
+  $res += $d;
+  return $res;
+}
+
+
+# components ###################################################################
+
+{
+  package Dir_Box;
+  use utf8;
+  use Glib qw/TRUE FALSE/;
+
+  my $file_dialog_run;
+
+  sub new {
+    my $class = shift;
+    my %opt = @_;
+
+    my $self = {};
+    bless ($self, $class);
+    $self->{label} = $opt{label};
+
+    my $hbox = Gtk2::HBox->new();
+    my $entry = Gtk2::Entry->new;
+    $hbox -> pack_end ($entry, TRUE, TRUE, 0);
+
+    my $butt = Gtk2::Button->new ($self->{label});
+    $hbox->pack_start ($butt, FALSE, FALSE, 0);
+    $butt->signal_connect (clicked => $file_dialog_run, $self);
+    $butt->set_size_request (50);
+    $self->{entry} = $entry;
+    $self->{box}   = $hbox;
+
+    return  $self;
+  }
+
+
+  sub tree_path {
+    my ($tree_view, $iter) = @_;
+    my $model = $tree_view->get_model();
+    my $dir_path;
+
+    while ($iter) {
+      my $name = $model->get_value ($iter);
+      $dir_path = $name . '/' . $dir_path;
+      $iter = $model->iter_parent ($iter);
+    }
+    return '/' . $dir_path;
+  }
+
+  sub set_handler {
+    my ($self, $handler) = @_;
+    $self->{entry}->signal_connect ('changed' => $handler);
+  }
+
+  sub get {
+    my $self = shift;
+    my $path = ::envar (::pwd (::home (::rm_sp ($self->{entry}->get_text))));
+    $path =~ s/\/$//;
+    set ($self, $path);
+    return $path;
+  }
+
+  sub set {
+    my ($self, $str) = @_;
+    $self->{entry}->set_text ($str);
+  }
+
+  sub focus {
+    my $self = shift;
+    return $self ->{entry}->grab_focus;
+  }
+
+  BEGIN {
+    $file_dialog_run =
+      sub {
+	my ($widget, $self) = @_;
+	my $caption = $self->{label};
+
+	my $dialog = Gtk2::FileChooserDialog->new
+	  (::text ('Select dir') . ' ' . $caption,
+	   undef,
+	   'select-folder',
+	   'gtk-ok'     => 'ok',
+	   'gtk-cancel' => 'cancel');
+
+	$dialog->set_current_folder ($self->{entry}->get_text);
+
+	my $filter = Gtk2::FileFilter->new;
+	$filter->add_mime_type ('inode/directory');
+
+	$dialog->set_filter ($filter);
+
+	if ( $dialog->run eq 'ok') {
+	  $self->{entry}->set_text ($dialog->get_filename);
+	  ::re_init();
+	}
+	$dialog->destroy;
+      };
+  }
+}
+# END Dir_Box ##################################################################
+
+
+{
+  package Result_List;
+
+  use utf8;
+  use Glib qw/TRUE FALSE/;
+  use Gtk2::SimpleList;
+  use File::Basename;
+
+  my @clmns;
+  my %clm; # index columns numbers on id
+
+  BEGIN {
+    @clmns = (
+       {id=>'name',    caption=>::text ('name'),  type=>'text', align=> 0},
+       {id=>'del',   caption=>'delete', type=>'bool', align=> 0.5},
+       {id=>'size',  caption=>::text ('size'),type=>'text', align=> 1},
+       {id=>'time',  caption=>::text ('time'),type=>'text', align=> 0},
+       {id=>'perm',  caption=>::text ('rights'),type=>'text', align=> 0},
+       {id=>'owner', caption=>::text ('owner'), type=>'text', align=> 0},
+       #    {id=>'flags',   caption=>'flags',          type=>'text', align=> 0});# for debug
+       {id=>'flags',   caption=>'flags',          type=>'hidden', align=> 0});
+
+    for (my $i = 0; $i <= $#clmns; $i++) {
+      $clm{$clmns[$i]{id}} = $i;
+    }
+  }
+
+  my $list;
+  my $scroll;
+
+  # private functions refs
+  my $click_column_hnd;
+  my $check_box_hnd;
+  my $col_randr_func;
+  my $is_separator_row;
+
+  sub create {
+    $list = Gtk2::SimpleList->new (map {($_->{caption}, $_->{type})} @clmns);
+    #$list->signal_connect('' => \&Result_List::list_click_hnd);
+
+    for (my $i = 0; $i <= $#clmns; $i++) {
+      my $clm = $list -> get_column ($i);
+      if ($clmns[$i]{type} ne 'hidden' ) {
+	my $r = $clm->get_cell_renderers;
+
+	$r->set('xalign', $clmns[$i]{align});
+	if ($clmns[$i]{type} eq 'bool') {
+	  $r->signal_connect ('toggled' => $check_box_hnd);
+
+	}
+	$clm->set_cell_data_func ($r, $col_randr_func, $i);
+      }
+    }
+
+    $list->get_selection->set_mode ('single'); #none, multiple
+
+    $scroll = Gtk2::ScrolledWindow->new;
+    $scroll -> set_policy ('automatic', 'automatic');
+    $scroll -> add ($list);
+
+    $list->signal_connect('button-press-event' => sub {
+    			    my ($widget,$event) = @_;
+    			    if ($event->button == 3) {
+    			      my @sel = Result_List::selected_inx();
+    			      return TRUE if $#sel > 0;
+    			      # not propogate event in list
+    			    } else {
+    			      FALSE;
+    			    }
+    			  });
+  }
+
+  sub clear {
+    $list->get_model->clear;
+  }
+
+  sub add {
+    my ($name, $info) = @_;
+    $name =~ s/^\///;
+
+    my @data;
+
+    $data[$clm{name}]    = $name;
+    $data[$clm{size}]  = $info->{size};
+    $data[$clm{time}]  = $info->{mtime};
+    $data[$clm{perm}]  = $info->{perm};
+    $data[$clm{owner}] = $info->{owner};
+    $data[$clm{del}]   = FALSE;
+    $data[$clm{flags}] = 1; #visible
+
+    push @{$list->{data}}, [@data];
+  }
+
+
+  sub add_separator {
+    my @data;
+
+    $data[$clm{name}]    = '--------------------';
+    $data[$clm{size}]  = '';
+    $data[$clm{time}]  = '';
+    $data[$clm{perm}]  = '';
+    $data[$clm{owner}] = '';
+    $data[$clm{del}]   = FALSE;
+    $data[$clm{flags}] = 0;
+
+    push @{$list->{data}}, [@data];
+  }
+
+  sub get_oper_inx_list {
+    my $result = shift;
+    my $l = $list->{data};
+    my $c = row_count();
+
+    for (my $i = 0; $i < $c; $i++) {
+      push @$result, $i if $l->[$i]->[$clm{del}]
+    }
+  }
+
+  sub selected_inx_0 {
+    my @sel = $list->get_selected_indices();
+    return $sel[0];
+  }
+
+  sub selected_inx {
+    return $list->get_selected_indices();
+  }
+
+  # имя выбранного файла
+  sub selected_name {
+    my $inx = selected_inx_0();
+    return @{$list->{data}}[$inx]->[$clm{name}];
+  }
+
+  sub diff_type {
+    my $inx = shift;
+    return @{$list->{data}}[$inx]->[$clm{diff}];
+  }
+
+  sub name {
+    return @{$list->{data}}[shift]->[$clm{name}];
+  }
+
+  sub row {
+    my $inx = shift;
+    return map {$_ => @{$list->{data}}[$inx]->[$clm{$_}]} keys %clm;
+  }
+
+  sub grab_focus {
+    $list->grab_focus;
+  }
+
+  sub row_count {
+    return $#{$list->{data}} + 1;
+  }
+
+  sub box {
+    return $scroll;
+  }
+
+  sub size_to_int {
+    my $s = shift;
+    $s =~ s/_//g;
+    return int($s);
+  }
+
+  BEGIN {
+    $click_column_hnd =
+      sub {
+	my ($widget, $data) = @_;
+	#print "click_column_hnd\n";
+      }; # end click_column_hnd
+
+    $check_box_hnd =
+      sub {
+	my ($renderer, $row) = @_;
+	#my $col = $renderer->{column_index};
+	#my $model = $list->get_model;
+	#print "check_box_hnd:$row,$col\n";
+      }; #end check_box_hnd
+
+    $col_randr_func =
+      sub {
+	my ($column, $renderer, $model, $iter, $col_index) = @_;
+	my $id = $clmns[$col_index]{id};
+
+	my $cl =  Gtk2::Gdk::Color->new (0xFFFF, 0xFFFF, 0xAAAA);
+	my $flags = $model->get_value ($iter, $clm{flags});
+
+	if (&$is_separator_row($flags)) {
+	  $renderer->set('visible', FALSE);
+	} else {
+	  $renderer->set('visible', TRUE);
+	  $renderer->set('sensitive', TRUE);
+	  $renderer->set('cell-background-gdk' => $cl);
+	}
+      }; # end col_randr_func
+
+
+    $is_separator_row =
+      sub {
+	my $flags = shift;
+	$flags == 0;
+     };
+
+
+  } # BEGIN
+}
+# END Result_List ####################################################
+package Menu;
+use utf8;
+use Glib qw/TRUE FALSE/;
+
+sub create {
+  my $menu = Gtk2::Menu->new;
+
+  # $menu->append (Gtk2::TearoffMenuItem->new);
+
+  while (my $i = shift) {
+    my ($item, $name, $handler, $opt);
+    $name = $i->{caption};
+    $handler = $i->{handler} if exists $i->{handler};
+
+    if (exists $i->{opt}) {
+      $opt = $i->{opt}
+    } else {
+      $opt = 0;
+    }
+
+    if ($name eq '---') {
+      $item = Gtk2::SeparatorMenuItem->new ();
+    } else {
+      $item = Gtk2::MenuItem->new_with_label (::text ($name));
+      $item->signal_connect ('activate' => $handler);
+      $item->set_property ('name', $name);
+    }
+
+    $item->set_property ('user-data', $opt);
+    $menu->append ($item);
+  }
+  $menu->signal_connect ('hide' => \&Menu::hide);
+  $menu->show_all;
+  return $menu;
+}
+
+sub show {
+  my ($menu, $check_callback) = @_;
+  my @list = $menu->get_children;
+
+  for my $i (@list) {
+    my $ud = $i->get_property ('user-data');
+    next if not $ud;
+
+    if (! &$check_callback ($ud)) {
+      $i->set_sensitive (FALSE);
+    }
+  }
+  $menu->popup (undef, undef, undef, undef, 0, 0);
+}
+
+sub hide {
+  my ($menu, $event) = @_;
+  my @list = $menu->get_children;
+  for my $i (@list) {
+    $i->set_sensitive (TRUE);
+  }
+}
+# END Menu #####################################################################
+
+package main;
+
+BEGIN {
+  $icon_data =<<END_ICON;
+iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAABmJLR0QA/wD/AP+gvaeTAAAACXBI
+WXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH3gQZCiMlxEtP2gAAAB1pVFh0Q29tbWVudAAAAAAAQ3Jl
+YXRlZCB3aXRoIEdJTVBkLmUHAAACbElEQVRYw+2XX0sUYRTGf+ed2W3XVnMjw9QMUjElW4suQoyu
+oosyCMqLwG8Q3fYh+gB+gIgMCqL1A2RG17uaZVGoaatZ/mnVddf583ZhWiquNbNbQh4YGIY5533e
+5znPmXdgL/73kLWbjhgXVizu2A5n0JhrzzUQNEGpgqyXEWFAKe7Gk/StA+iI0SkiDy+2NXGpvZlQ
+MLCeYRqKx/2fSM1mf6L1GJZtMTM9yZfPk4C+EU/ySK7GqMpZvL9183y4pbEax3E3UiTwemyBF69m
+CkO5COlvc4x+eJdRijplO7TUVJaGz548tmVxAK2hoTpCNBLA1auS+AmtNeXRQ4TCoRKtOWW6mvq6
+o4exbGfbJNMQrrVXMTqVYXh8gUzO8SWHUoqD0XJSqakGE1CGsXM5Qwn11fs5URtBfHZDIGBwb3mS
+8QmU+Wf0gWVr/AqhEdwfJdS/ngN5GdCu/92CIEq8AbDuJ3FefgTlUXMXVFMF+26f88jA4gp6LutP
+73T+/Pw94Gr/Iu9QIy8DxukjSCS4Og69TR2kqtQ7ALOtFtpqi+qC3W1D+9kIzvBXPA8+DaqmjMCV
+Rm8AnKFpnP4xfy5orsgLIL8ESgogsniXQCJBJBr23ika5EDoNwBsY9VgVyt0tfomQWuNbLbyLx+j
++fRidusLhTx4bqotIqSXsgjMK9MgkXg74WSWc3/NepnsCok3E65hkFC9AwwqYai75zmGoVAiSJEu
+pQTDUHQ/6EMphnoHGFw7FZu2w5PSksDlxuOVBANmUXaey1kMj0yxtGw/NQ2ux5NYG8TpiFEJdAJl
+RWJ/FuiJJ5nd+yXbNfEddB3KioUXs90AAAAASUVORK5CYII=
+END_ICON
+
+  %local_text = ();
+
+  %help_text = ();
+}
