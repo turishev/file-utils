@@ -67,6 +67,7 @@ my $main_window = create_window ();
 my $exe_butt;
 my $clear_hidd_butt;
 my $break_oper = 0;
+my $last_time_upd_gui = 0;
 
 init_controls ();
 
@@ -147,7 +148,7 @@ sub create_window {
 
   my $comp_butt = Gtk2::Button->new (text ('Search'));
   $hbox->pack_start ($comp_butt, TRUE, TRUE, 0);
-  $exe_butt = Gtk2::Button->new (text ('Execute'));
+  $exe_butt = Gtk2::Button->new (text ('Delete selected'));
   $exe_butt->set_sensitive (FALSE);
   $hbox->pack_start ($exe_butt, TRUE, TRUE, 0);
 
@@ -307,10 +308,14 @@ sub show_help {
   $dialog->destroy;
 }
 
+
 sub gui_upd {
-  progress_next ();
-  while (Glib::MainContext->default->pending) {
-    Glib::MainContext->default->iteration (FALSE);
+  if (time() > $last_time_upd_gui) {
+    progress_next ();
+    while (Glib::MainContext->default->pending) {
+      Glib::MainContext->default->iteration (FALSE);
+    }
+    $last_time_upd_gui = time();
   }
 }
 
@@ -392,20 +397,33 @@ sub start_compare {
 
   my @names;
 
-  progress_start (0, text ('get file-list') . ' A');
+  progress_start (0, text ('get list of files'));
   create_path_list ($start_dir, \@names, $comp_opt{search_depth});
-  #print "@names"; print "\n";
-  progress_reset (0, text ('search duplicates'));
+  progress_reset (0, text ('search duplicates, files: ') . $#names);
 
-  search_duplicates (\@names, \&progress_next);
+  search_duplicates (\@names);
 
   progress_end();
 
   Result_List::row_count() == 0 and ! $break_oper
       and show_msg ('info', text ('No duplicates were found'));
 
-  Result_List::clear() if $break_oper;
+  #Result_List::clear() if $break_oper;
 }
+
+sub recheck_list {
+  my $names = shift;
+  Result_List::clear();
+
+  progress_start (0, text ('re-check results, files: ') . $#$names);
+  search_duplicates ($names);
+  progress_end();
+
+  Result_List::row_count() == 0 and ! $break_oper
+      and show_msg ('info', text ('No duplicates were found'));
+}
+
+
 
 sub create_path_list {
   my ($dir, $res, $depth) = @_;
@@ -428,7 +446,7 @@ sub create_path_list {
 	     my $p = substr $path, (length $dir) + 1;
 	     push @$res,  $p;
 
-	     gui_upd (), $cnt = 0 if $cnt++ >= 20;
+	     gui_upd ();#, $cnt = 0 if $cnt++ >= 20;
 	   }},
 	  encode ('utf8', $dir));
   };
@@ -438,44 +456,44 @@ sub create_path_list {
 }
 
 sub search_duplicates {
-  my ($names, $iter_callback) = @_;
-  my ($base_dir);
+  my ($names) = @_;
   my (%base_parm, $parm_a);
-
-  #map {print "$_:$comp_opt{$_}\n"} keys %comp_opt;
-
   my %ignore = ();
-
   my $group_started = 0;
-
+ OUTER:
   for (my $i = 0; $i<=  $#{$names}; $i++) {
-    &$iter_callback if defined $iter_callback;
     $group_started = 0;
     my $base_name = $names->[$i];
     if (! exists($ignore{$i})) {
       my $base_path = $start_dir .'/' . $base_name;
       %base_parm = get_file_info ($base_path);
 
-      # print encode('utf8', $base_path) . "\n";
-      for (my $j = $i+1; $j <=  $#{$names}; $j++) {
-	my $other_name = $names->[$j];
-	my $other_path = $start_dir .'/' . $other_name;
-	my %other_parm = get_file_info ($other_path);
+      if ($base_parm{type} ne 'none') { 
+	for (my $j = $i+1; $j <=  $#{$names}; $j++) {
+	  last OUTER if $break_oper;
+	  gui_upd();
 
-	#print "  ". encode('utf8', $other_path) . "\n";
+	  my $other_name = $names->[$j];
+	  my $other_path = $start_dir .'/' . $other_name;
+	  my %other_parm = get_file_info ($other_path);
 
-	if (! exists($ignore{$j}) && $base_parm{type} eq 'file' && $other_parm{type} eq 'file'
-	    #&&  $base_parm{size} eq $other_parm{size}
-	    && compare ($base_path, $other_path) == 0) {
-	  $ignore{$i} = 1;
-	  $ignore{$j} = 1;
+	  if ( $other_parm{type} ne 'none'
+	       && ! exists($ignore{$j})
+	       && $base_parm{type} eq 'file'
+	       && $other_parm{type} eq 'file'
+	       #&&  $base_parm{size} eq $other_parm{size}
+	       && compare ($base_path, $other_path) == 0) {
 
-	  if (! $group_started) {
-	    $group_started = 1;
-	    Result_List::add_separator ();
-	    Result_List::add ($base_name, \%base_parm);
+	    $ignore{$i} = 1;
+	    $ignore{$j} = 1;
+
+	    if (! $group_started) {
+	      $group_started = 1;
+	      Result_List::add_separator ();
+	      Result_List::add ($base_name, \%base_parm);
+	    }
+	    Result_List::add ($other_name, \%other_parm);
 	  }
-	  Result_List::add ($other_name, \%other_parm);
 	}
       }
     }
@@ -502,15 +520,15 @@ sub get_file_info {
   #              12 blocks   actual number of blocks allocated
 
   if (not @par) {
-    print STDERR "get_file_info:file not exists? '$name'\n";
-    return;
+    # file not exists?
+    return (type => 'none');
   }
   my $type = file_type_format ($par[2]);
   my $info;
-  if ($type eq 'l') {
+  if ($type eq 'link') {
     $info = "-> ". readlink ($name);
   }
-  if ($type eq 'c' or $type eq 'b') {
+  if ($type eq 'char' or $type eq 'block') {
     $info = rdev_format ($par[6]);
   }
   return (type  => $type,
@@ -530,16 +548,18 @@ sub start_operation {
   Result_List::get_oper_inx_list (\@inxes);
 
   return if $#inxes < 0;
-  show_msg ('question', 'Execute all operation?') or return;
+  my @names = map {Result_List::name ($_)} @inxes;
 
-  for my $i (@inxes) {
+  show_msg ('question', 'Do you want delete selected files?') or return;
+
+  for my $name (@names) {
     last if $break_oper;
-    my %row = Result_List::row ($i);
-    my $path = $start_dir . '/' . $row{name};
+    my $path = $start_dir . '/' . $name;
     unlink $path or print decode ('utf-8', $!);
   }
 
-  start_compare();
+  my @all_names = Result_List::all_names();
+  recheck_list(\@all_names);
 }
 
 sub check_path {
@@ -834,8 +854,7 @@ sub dir_depth {
        {id=>'time',  caption=>::text ('time'),type=>'text', align=> 0},
        {id=>'perm',  caption=>::text ('rights'),type=>'text', align=> 0},
        {id=>'owner', caption=>::text ('owner'), type=>'text', align=> 0},
-       #    {id=>'flags',   caption=>'flags',          type=>'text', align=> 0});# for debug
-       {id=>'flags',   caption=>'flags',          type=>'hidden', align=> 0});
+       {id=>'flags', caption=>'flags', type=>'hidden', align=> 0});
 
     for (my $i = 0; $i <= $#clmns; $i++) {
       $clm{$clmns[$i]{id}} = $i;
@@ -948,13 +967,13 @@ sub dir_depth {
     return @{$list->{data}}[$inx]->[$clm{name}];
   }
 
-  sub diff_type {
-    my $inx = shift;
-    return @{$list->{data}}[$inx]->[$clm{diff}];
-  }
-
   sub name {
-    return @{$list->{data}}[shift]->[$clm{name}];
+    my $inx = shift;
+    return @{$list->{data}}[$inx]->[$clm{name}];
+  }
+  sub all_names {
+    my @real_data = grep {$_->[$clm{flags}]} @{$list->{data}};
+    return map {$_ -> [$clm{name}]} @real_data;
   }
 
   sub row {
