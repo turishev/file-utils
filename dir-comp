@@ -1412,7 +1412,7 @@ sub dir_depth {
   my $end_rx;
 
   sub create {
-    my $window = Gtk2::Window->new ('toplevel');
+    my $window = Gtk2::Window->new ('toplevel'); # 'popup' 'toplevel'
     $window->set_title ("$main_title:operations");
     $window->set_size_request (800, 600);
     my $mainbox = Gtk2::VBox->new ();
@@ -1450,9 +1450,10 @@ sub dir_depth {
 
     $butt_ab =  Gtk2::Button->new (::text ('Abort'));
     $butt_ab->signal_connect (clicked =>
-			      sub {worker_break();
-				   add ('-- ABORT REQUESTED --');
-			          # $butt_ab->set_sensitive (FALSE);
+			      sub {
+				::worker_break();
+				add ('-- ABORT REQUESTED --');
+				# $butt_ab->set_sensitive (FALSE);
 			      },
 			   $window);
 
