@@ -203,7 +203,7 @@ sub create_window {
   $window->signal_connect (destroy => \&on_exit);
   $window->set_border_width (5);
   $window->set_title ($main_title);
-  $window->set_size_request (640, 480);
+  $window->set_size_request (800, 600);
 
   my $mainbox = Gtk2::VBox->new ();
 
@@ -1402,6 +1402,7 @@ sub dir_depth {
   use Encode;
   use Glib qw/TRUE FALSE/;
 
+  my $textview;
   my $log_buffer;
   my $glib_idle_id;
   my $butt_ab;
@@ -1413,14 +1414,14 @@ sub dir_depth {
   sub create {
     my $window = Gtk2::Window->new ('toplevel');
     $window->set_title ("$main_title:operations");
-    $window->set_size_request (640, 480);
+    $window->set_size_request (800, 600);
     my $mainbox = Gtk2::VBox->new ();
     $window->add ($mainbox);
     $window->set_modal(TRUE);
     $window->set_icon ($icon_pixbuf);
     $window->signal_connect (destroy => sub {log_close (undef,$window)});
 
-    my $textview = Gtk2::TextView->new();
+    $textview = Gtk2::TextView->new();
 
     $log_buffer = $textview->get_buffer();
 
@@ -1431,7 +1432,7 @@ sub dir_depth {
 
     $textview->set_editable (FALSE);
     $textview->set_wrap_mode ('word');
-
+    # $textview->set_bottom_margin(20); #gtk+4
 
     my $hbox = Gtk2::HBox->new (FALSE, 5);
     $mainbox->pack_start($hbox, FALSE, FALSE, 0);
@@ -1483,6 +1484,7 @@ sub dir_depth {
     if (defined $log_buffer) {
       my $iter = $log_buffer->get_end_iter();
       $log_buffer->insert ($iter, $str . "\n");
+      $textview->scroll_to_iter ($log_buffer->get_end_iter(), 0.5, TRUE, 0.5, 0.5);
     }
   }
 
